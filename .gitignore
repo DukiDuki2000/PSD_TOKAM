@@ -1,0 +1,4 @@
+/.venv
+/.idea
+/python/poetry.lock
+/flink-volume/jobs/.idea/
