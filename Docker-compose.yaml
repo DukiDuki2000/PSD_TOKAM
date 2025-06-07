@@ -21,7 +21,7 @@ services:
     networks:
       - flink-network
   jobmanager:
-    image: apache/flink:1.19-java8
+    image: apache/flink:1.19-java11
     container_name: flink-jobmanager
     ports:
       - "8081:8081"
@@ -34,7 +34,7 @@ services:
       - flink-network
 
   taskmanager:
-    image: apache/flink:1.19-java8
+    image: apache/flink:1.19-java11
     container_name: flink-taskmanager
     depends_on:
       - jobmanager

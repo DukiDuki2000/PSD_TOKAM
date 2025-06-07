@@ -21,4 +21,4 @@ ENV FLASK_HOST=0.0.0.0 \
 
 COPY . .
 
-ENTRYPOINT ["python", "-m", "generator.consumer"]
+ENTRYPOINT ["python", "-m", "generator.main"]
