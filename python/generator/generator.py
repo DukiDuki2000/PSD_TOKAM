@@ -7,6 +7,7 @@ import threading
 import time
 
 from kafka import KafkaProducer
+from datetime import datetime
 
 from python.generator.transaction import Transaction
 from python.generator.card_profile import CardProfile
@@ -20,7 +21,22 @@ REDIS_PORT = os.getenv('REDIS_PORT', '6379')
 REDIS_DB = os.getenv('REDIS_DB', '0')
 REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', 'admin')
 
-
+normal_categories_weighted = [
+    "grocery", "grocery", "grocery", "grocery",
+    "restaurant", "restaurant", "restaurant",
+    "gas_station", "gas_station", "gas_station",
+    "retail", "retail", "retail",
+    "pharmacy", "pharmacy",
+    "transport", "transport",
+    "supermarket", "supermarket",
+    "entertainment", "cinema", "clothing",
+    "electronics", "home_improvement", "bookstore",
+    "coffee_shop", "fast_food", "department_store",
+    "jewelry", "sports_goods", "beauty_salon",
+    "auto_service", "hotel", "travel_agency",
+    "insurance", "bank_service", "medical",
+    "education", "charity", "parking"
+]
 class TransactionGenerator:
     def __init__(self, num_cards: int = 10000, num_users: int = 2000):
         self.kafka_producer = KafkaProducer(
@@ -45,7 +61,10 @@ class TransactionGenerator:
                                    'transaction_limit': AnomalyGenerator.transaction_limit_anomaly,
                                    'micro_transactions': AnomalyGenerator.micro_transaction_anomaly,
                                    'rapid_geo_change': AnomalyGenerator.rapid_geo_change_anomaly,
-                                   'duplicate_transactions': AnomalyGenerator.duplicate_transaction_anomaly
+                                   'duplicate_transactions': AnomalyGenerator.duplicate_transaction_anomaly,
+                                   'round_amounts': AnomalyGenerator.round_amount_anomaly,
+                                   'atm_pattern': AnomalyGenerator.atm_pattern_anomaly,
+                                   'unusual_merchant_anomaly': AnomalyGenerator.unusual_merchant_anomaly
                                    }
 
         self.card_generator = CardGenerator(REDIS_HOST, REDIS_PORT, REDIS_DB, REDIS_PASSWORD)
@@ -59,6 +78,7 @@ class TransactionGenerator:
                 "user_id": transaction.user_id,
                 "amount": transaction.amount,
                 "status": transaction.status,
+                "merchant_category": transaction.merchant_category,
                 "location": {
                     "latitude": transaction.location.latitude,
                     "longitude": transaction.location.longitude,
@@ -75,16 +95,20 @@ class TransactionGenerator:
             )
 
         except Exception as e:
-            self.logger.error(f"Failed to send transaction to Kafka: {e}")
+            print(f"Failed to send transaction to Kafka: {e}")
 
     def generate_transaction(self, card_profile: CardProfile) -> Transaction:
         amount = round(max(5.0, np.random.normal(card_profile.avg_amount, card_profile.std_amount)), 2)
-        amount = min(amount, card_profile.daily_limit * 0.1)
+        max_allowed = round(card_profile.daily_limit * 0.1, 2)
+        amount = min(amount, max_allowed)
 
         if random.random() < 0.85:
             location = LocationUtils.get_random_polish_city()
         else:
             location = LocationUtils.get_random_foreign_city()
+
+
+        category = random.choice(normal_categories_weighted)
 
         transaction = Transaction(
             transaction_id=f"tx_{uuid.uuid4().hex[:12]}",
@@ -92,10 +116,13 @@ class TransactionGenerator:
             user_id=card_profile.user_id,
             amount=amount,
             location=location,
-            status="approved"
+            status="approved",
+            merchant_category=category
         )
 
         return transaction
+
+
 
     def execute_plan(self, plan: dict):
         user_id = plan["user_id"]
@@ -110,7 +137,6 @@ class TransactionGenerator:
             else:
                 transaction_count = plan["count"]
 
-
             for i in range(transaction_count):
                 time.sleep(plan["intervals_seconds"][i])
 
@@ -119,17 +145,22 @@ class TransactionGenerator:
                 else:
                     location = plan["location"]
 
+                if plan_type == "atm_pattern":
+                    category = "atm_withdrawal"
+                else:
+                    category = random.choice(normal_categories_weighted)
+
                 transaction = Transaction(
                     transaction_id=f"tx_{uuid.uuid4().hex[:12]}",
                     card_id=plan["card_id"],
                     user_id=plan["user_id"],
                     amount=plan["amounts"][i],
                     location=location,
-                    status="approved"
+                    status="approved",
+                    merchant_category=category
                 )
 
-                print(
-                    f"[{plan_type.upper()} PLAN] Executing #{i + 1}/{transaction_count}: {plan['amounts'][i]}zł in {location.city}")
+                print(f"[{plan_type.upper()} PLAN] Executing #{i + 1}/{transaction_count}: {plan['amounts'][i]}zł in {location.city}")
                 self.send_to_kafka(transaction)
 
         finally:
@@ -143,8 +174,21 @@ class TransactionGenerator:
             if transaction.user_id in self.users_in_plan:
                 return []
 
+        if not card_profile.is_active:
+            print("[ANOMALY] not_active_card")
+            result = self.anomaly_generators['not_active'](transaction, card_profile)
+            return [result]
+
+
+        if card_profile.expiry_date <= datetime.now():
+            print("[ANOMALY] expired_card")
+            result = self.anomaly_generators['expired_card'](transaction, card_profile)
+            return [result]
+
         if random.random() < 0.05:
             anomaly_types = list(self.anomaly_generators.keys())
+            anomaly_types.remove('expired_card')
+            anomaly_types.remove('not_active')
             anomaly = random.choice(anomaly_types)
             print(f"[ANOMALY] {anomaly}")
 
@@ -153,7 +197,7 @@ class TransactionGenerator:
             if isinstance(result, dict):
                 plan_type = result.get("type")
 
-                if plan_type in ["rapid_geo_change", "micro_transactions","duplicate_transactions"]:
+                if plan_type in ["rapid_geo_change", "micro_transactions","duplicate_transactions","round_amounts", "atm_pattern"]:
                     with self.user_lock:
                         if self.active_threads < self.max_threads:
                             self.active_threads += 1

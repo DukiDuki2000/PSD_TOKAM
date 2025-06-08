@@ -12,13 +12,13 @@ class AnomalyGenerator:
     def amount_anomaly(transaction: Transaction, card_profile: CardProfile) -> Transaction:
         """Anomalia dużych kwot - transakcja znacznie przekraczająca średnią"""
         multiplier = random.uniform(5, 20)
-        transaction.amount = card_profile.avg_amount * multiplier
+        transaction.amount = round(card_profile.avg_amount * multiplier,2)
         return transaction
 
     @staticmethod
     def insufficient_funds_anomaly(transaction: Transaction, card_profile: CardProfile) -> Transaction:
         """Anomalia przekroczenia limitu karty - za mało środków"""
-        transaction.amount = card_profile.current_balance + random.uniform(100, 1000)
+        transaction.amount = round(card_profile.current_balance + random.uniform(100, 1000),2)
         transaction.status = "declined"
         return transaction
 
@@ -38,14 +38,14 @@ class AnomalyGenerator:
 
     @staticmethod
     def transaction_limit_anomaly(transaction: Transaction, card_profile: CardProfile) -> Transaction:
-        """Anomalia przekroczenia limitu karty - transakcja powyżej 1000 zł"""
+        """Anomalia przekroczenia limitu karty"""
         transaction.amount = round(card_profile.transaction_limit + random.uniform(100, 2000), 2)
         transaction.status = "declined"
         return transaction
 
     @staticmethod
     def micro_transaction_anomaly(transaction: Transaction, card_profile: CardProfile) -> dict:
-        """Anomalia dużej ilości groszowych transakcji - plan czasowy"""
+        """Anomalia dużej ilości groszowych transakcji """
         num_transactions = random.randint(3, 10)
 
         micro_plan = {
@@ -79,8 +79,8 @@ class AnomalyGenerator:
 
     @staticmethod
     def duplicate_transaction_anomaly(transaction: Transaction, card_profile: CardProfile) -> dict:
-        """Anomalia duplikatów - ta sama transakcja powtórzona kilka razy w krótkim czasie"""
-        num_duplicates = random.randint(2, 5)  # 2-5 duplikatów
+        """Anomalia duplikatów"""
+        num_duplicates = random.randint(2, 5)
         duplicate_plan = {
             "type": "duplicate_transactions",
             "user_id": card_profile.user_id,
@@ -92,6 +92,60 @@ class AnomalyGenerator:
             "original_amount": transaction.amount
         }
         return duplicate_plan
+
+    @staticmethod
+    def round_amount_anomaly(transaction: Transaction, card_profile: CardProfile) -> dict:
+        """Anomalia okrągłych kwot"""
+        num_transactions = random.randint(3, 7)
+        round_amounts = []
+        for _ in range(num_transactions):
+            round_type = random.choice(['tens', 'fifties', 'hundreds'])
+            if round_type == 'tens':
+                amount = random.randint(1, 9) * 10.00
+            elif round_type == 'fifties':
+                amount = random.randint(1, 10) * 50.00
+            else:
+                amount = random.randint(1, 10) * 100.00
+
+            round_amounts.append(amount)
+
+        round_plan = {
+            "type": "round_amounts",
+            "user_id": card_profile.user_id,
+            "card_id": card_profile.card_id,
+            "location": transaction.location,
+            "count": num_transactions,
+            "intervals_seconds": [random.randint(10, 30) for _ in range(num_transactions)],
+            "amounts": round_amounts
+        }
+        return round_plan
+
+    @staticmethod
+    def atm_pattern_anomaly(transaction: Transaction, card_profile: CardProfile) -> dict:
+        """Anomalia wzorca bankomatowego"""
+        atm_amounts = [20.00, 50.00, 100.00, 200.00, 300.00, 500.00]
+        num_attempts = random.randint(3, 6)
+
+        atm_plan = {
+            "type": "atm_pattern",
+            "user_id": card_profile.user_id,
+            "card_id": card_profile.card_id,
+            "location": transaction.location,
+            "count": num_attempts,
+            "intervals_seconds": [random.randint(5, 20) for _ in range(num_attempts)],
+            "amounts": [random.choice(atm_amounts) for _ in range(num_attempts)]
+        }
+        return atm_plan
+
+    @staticmethod
+    def unusual_merchant_anomaly(transaction: Transaction, card_profile: CardProfile) -> Transaction:
+        """Anomalia nietypowego sprzedawcy """
+        suspicious_categories = ["gambling", "luxury_goods", "crypto_exchange", "adult_services", "high_risk_merchant"]
+        category = random.choice(suspicious_categories)
+
+        transaction.amount = round(transaction.amount * random.uniform(3, 8), 2)
+        transaction.merchant_category = category
+        return transaction
 
 
 

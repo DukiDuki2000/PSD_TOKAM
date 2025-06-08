@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 from python.generator.location import Location
+
+
 @dataclass
 class Transaction:
     transaction_id: str
@@ -8,4 +10,4 @@ class Transaction:
     amount: float
     location: Location
     status: str = "approved"
-
+    merchant_category: str ="general"
