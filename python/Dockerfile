@@ -7,7 +7,10 @@ ENV POETRY_NO_INTERACTION=1 \
     POETRY_CACHE_DIR=/tmp/poetry_cache
 
 WORKDIR /app
+
+
 COPY pyproject.toml poetry.lock ./
+
 RUN poetry install --no-root
 
 ENV VIRTUAL_ENV=/app/.venv \
@@ -19,6 +22,9 @@ ENV FLASK_HOST=0.0.0.0 \
     KAFKA_BROKER=kafka:9093 \
     KAFKA_TOPIC=sensor_data
 
-COPY . .
 
-ENTRYPOINT ["python", "-m", "generator.main"]
+COPY . ./python/
+
+ENV PYTHONPATH=/app
+
+ENTRYPOINT ["python", "-m", "python.generator.main"]

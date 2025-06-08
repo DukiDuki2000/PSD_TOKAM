@@ -1,7 +1,6 @@
 import random
 import json
 import os
-import numpy as np
 import uuid
 import threading
 import time
@@ -98,7 +97,9 @@ class TransactionGenerator:
             print(f"Failed to send transaction to Kafka: {e}")
 
     def generate_transaction(self, card_profile: CardProfile) -> Transaction:
-        amount = round(max(5.0, np.random.normal(card_profile.avg_amount, card_profile.std_amount)), 2)
+        min_amount = max(5.0, card_profile.avg_amount - card_profile.std_amount)
+        max_amount = card_profile.avg_amount + card_profile.std_amount
+        amount = round(random.uniform(min_amount, max_amount), 2)
         max_allowed = round(card_profile.daily_limit * 0.1, 2)
         amount = min(amount, max_allowed)
 

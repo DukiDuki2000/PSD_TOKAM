@@ -111,12 +111,10 @@ services:
       - FLASK_DEBUG=false
       - KAFKA_BROKER=kafka:9093
       - KAFKA_TOPIC=sensor_data
-
-
-
-
-
-
+      - REDIS_HOST=redis-server
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_PASSWORD=admin
 
 
 networks:
