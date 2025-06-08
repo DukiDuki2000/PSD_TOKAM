@@ -5,7 +5,7 @@ import random
 from typing import List
 
 from python.generator.card_profile import CardProfile
-
+from datetime import datetime
 
 class CardGenerator:
     def __init__(self, redis_host: str, redis_port: str, redis_db: str, redis_password: str):
@@ -35,6 +35,10 @@ class CardGenerator:
                 "std_amount": card_profile.std_amount,
                 "daily_limit": card_profile.daily_limit,
                 "monthly_limit": card_profile.monthly_limit,
+                "transaction_limit": card_profile.transaction_limit,
+                "is_active": card_profile.is_active,
+                "current_balance": card_profile.current_balance,
+                "expiry_date": card_profile.expiry_date.isoformat()
             }
             self.redis_client.set(f"card_profile:{card_id}", json.dumps(profile_json))
 
@@ -58,6 +62,10 @@ class CardGenerator:
         card_profile.std_amount = data["std_amount"]
         card_profile.daily_limit = data["daily_limit"]
         card_profile.monthly_limit = data["monthly_limit"]
+        card_profile.transaction_limit = data["transaction_limit"]
+        card_profile.is_active = data["is_active"]
+        card_profile.current_balance = data["current_balance"]
+        card_profile.expiry_date = datetime.fromisoformat(data["expiry_date"])
 
         return card_profile
 
