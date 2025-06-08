@@ -12,16 +12,23 @@ import org.example.config.RedisConfig;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
 import redis.clients.jedis.JedisPoolConfig;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import java.util.Set;
+import java.util.UUID;
+
 
 public class AmountAnomalyDetectionProcess extends ProcessFunction<Transaction, Transaction> {
 
     private final OutputTag<AnomalyAlert> amountAnomalyTag;
     private transient JedisPool jedisPool;
-    private static final double ANOMALY_THRESHOLD = 2.5; // Z-score threshold
-    private static final double EXTREME_MULTIPLIER_THRESHOLD = 5.0; // Multiplier threshold (matches Python generator)
+    private transient ObjectMapper objectMapper;
+
+
+    private static final double SUSPICIOUS_MULTIPLIER_THRESHOLD = 4.0; // Alert when 4x+ average
+    private static final double EXTREME_MULTIPLIER_THRESHOLD = 8.0;    // Higher severity when 8x+ average
+    private static final double CRITICAL_MULTIPLIER_THRESHOLD = 15.0;  // Critical when 15x+ average
+
+    private static final String AMOUNT_STATS_PREFIX = "amount_stats:";
+    private static final int AMOUNT_STATS_TTL = 30; // 30 s  TTL
+    private static final int MAX_RECENT_AMOUNTS = 10; // Keep only 10 recent amounts for performance
 
     public AmountAnomalyDetectionProcess(OutputTag<AnomalyAlert> amountAnomalyTag) {
         this.amountAnomalyTag = amountAnomalyTag;
@@ -29,173 +36,168 @@ public class AmountAnomalyDetectionProcess extends ProcessFunction<Transaction, 
 
     @Override
     public void open(Configuration parameters) throws Exception {
+        JedisPoolConfig config = new JedisPoolConfig();
+        config.setMaxTotal(50);
+        config.setMaxIdle(20);
+        config.setMinIdle(5);
+        config.setTestOnBorrow(true);
+        config.setMaxWaitMillis(500);
 
-        try {
-            JedisPoolConfig config = new JedisPoolConfig();
-            config.setMaxTotal(10);
-            config.setMaxIdle(5);
-            config.setMinIdle(1);
-            config.setTestOnBorrow(true);
-
-            jedisPool = new JedisPool(config, RedisConfig.REDIS_HOST, RedisConfig.REDIS_PORT,
-                    2000, RedisConfig.REDIS_PASSWORD);
-
-            try (Jedis jedis = jedisPool.getResource()) {
-                String pong = jedis.ping();
-            }
-        } catch (Exception e) {
-            throw e;
-        }
+        jedisPool = new JedisPool(config, RedisConfig.REDIS_HOST, RedisConfig.REDIS_PORT,
+                500, RedisConfig.REDIS_PASSWORD);
+        objectMapper = new ObjectMapper();
     }
 
     @Override
-    public void processElement(Transaction transaction, Context context, Collector<Transaction> out) throws Exception {
+    public void processElement(Transaction transaction, Context context, Collector<Transaction> out)
+            throws Exception {
+
         try {
             CardProfile cardProfile = getCardProfile(transaction.cardId);
 
             if (cardProfile != null) {
-                checkAmountAnomaly(transaction, cardProfile, context);
-            } else {
-                System.out.println("⚠️ No card profile found for card: " + transaction.cardId);
+                detectAmountAnomaly(transaction, cardProfile, context);
+                updateAmountStatistics(transaction, cardProfile);
             }
+
         } catch (Exception e) {
+            System.err.println("Amount anomaly detection error for card " + transaction.cardId + ": " + e.getMessage());
         }
 
         out.collect(transaction);
     }
 
-    private CardProfile getCardProfile(String cardId) {
-        if (jedisPool == null) {
-            return null;
-        }
 
-        try (Jedis jedis = jedisPool.getResource()) {
-            String profileKey = "card_profile:" + cardId;
-            String profileJson = jedis.get(profileKey);
-
-            if (profileJson != null) {
-                CardProfile profile = parseCardProfileManually(profileJson);
-
-                if (profile != null) {
-
-                    return profile;
-                } else {
-
-                    return null;
-                }
-            } else {
-                return null;
-            }
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    private CardProfile parseCardProfileManually(String json) {
-        try {
-            json = json.trim();
-            if (json.startsWith("{")) json = json.substring(1);
-            if (json.endsWith("}")) json = json.substring(0, json.length() - 1);
-
-            CardProfile profile = new CardProfile();
-
-            String[] pairs = json.split(",");
-
-            for (String pair : pairs) {
-                String[] keyValue = pair.split(":", 2);
-                if (keyValue.length == 2) {
-                    String key = keyValue[0].trim().replace("\"", "");
-                    String value = keyValue[1].trim().replace("\"", "");
-
-                    switch (key) {
-                        case "card_id":
-                            profile.cardId = value;
-                            break;
-                        case "user_id":
-                            profile.userId = value;
-                            break;
-                        case "avg_amount":
-                            profile.avgAmount = Double.parseDouble(value);
-                            break;
-                        case "std_amount":
-                            profile.stdAmount = Double.parseDouble(value);
-                            break;
-                        case "daily_limit":
-                            profile.dailyLimit = Double.parseDouble(value);
-                            break;
-                        case "monthly_limit":
-                            profile.monthlyLimit = Double.parseDouble(value);
-                            break;
-                    }
-                }
-            }
-
-            return profile;
-        } catch (Exception e) {
-            return parseWithObjectMapper(json);
-        }
-    }
-
-    private CardProfile parseWithObjectMapper(String json) {
-        try {
-            ObjectMapper mapper = new ObjectMapper();
-            return mapper.readValue(json, CardProfile.class);
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-
-
-    private void checkAmountAnomaly(Transaction transaction, CardProfile cardProfile, Context context) throws Exception {
+    private void detectAmountAnomaly(Transaction transaction, CardProfile cardProfile, Context context) {
         double transactionAmount = transaction.amount;
-        double avgAmount = cardProfile.avgAmount;
-        double stdAmount = Math.max(cardProfile.stdAmount, 1.0);
+        double userAvgAmount = cardProfile.avgAmount;
 
-        double zScore = Math.abs(transactionAmount - avgAmount) / stdAmount;
+        if (userAvgAmount < 1.0) {
+            return;
+        }
 
-        double multiplier = transactionAmount / avgAmount;
+        double multiplier = transactionAmount / userAvgAmount;
 
-        boolean isZScoreAnomaly = zScore > ANOMALY_THRESHOLD;
-        boolean isExtremeAmount = multiplier >= EXTREME_MULTIPLIER_THRESHOLD;
 
-        if (isZScoreAnomaly || isExtremeAmount) {
-            String description;
+        if (multiplier >= SUSPICIOUS_MULTIPLIER_THRESHOLD) {
+
+            String severityLevel;
             double severity;
 
-            if (isExtremeAmount) {
-                description = String.format("🚨 EXTREME AMOUNT: %.2f (%.1fx average %.2f) - matches Python generator pattern!",
-                        transactionAmount, multiplier, avgAmount);
-                severity = Math.min(multiplier / 20.0, 1.0);
-
+            if (multiplier >= CRITICAL_MULTIPLIER_THRESHOLD) {
+                severityLevel = "CRITICAL";
+                severity = 1.0; // Maximum severity
+            } else if (multiplier >= EXTREME_MULTIPLIER_THRESHOLD) {
+                severityLevel = "EXTREME";
+                severity = 0.8;
             } else {
-                description = String.format("📈 HIGH Z-SCORE: Amount %.2f deviates %.2f standard deviations from average %.2f",
-                        transactionAmount, zScore, avgAmount);
-                severity = Math.min(zScore / 5.0, 1.0);
+                severityLevel = "HIGH";
+                severity = 0.6;
             }
 
-            // Stwórz alert
+            String description = String.format(
+                    "[%s] Large amount detected: %.2f PLN (%.1fx user's average %.2f PLN). " +
+                            "Pattern matches Python amount_anomaly generator (5-20x multiplier).",
+                    severityLevel, transactionAmount, multiplier, userAvgAmount
+            );
+
             AnomalyAlert alert = new AnomalyAlert(
-                    "amount_" + transaction.transactionId,
+                    "amount_" + UUID.randomUUID().toString().substring(0, 8),
                     transaction.transactionId,
                     transaction.cardId,
                     transaction.userId,
                     "AMOUNT_ANOMALY",
                     description,
                     severity,
-                    transaction.timestamp
+                    System.currentTimeMillis(),
+                    transaction.location
             );
 
             context.output(amountAnomalyTag, alert);
 
+            System.out.println(String.format(
+                    "🚨 AMOUNT ANOMALY: Card %s, Amount %.2f PLN (%.1fx avg), Severity: %s",
+                    transaction.cardId, transactionAmount, multiplier, severityLevel
+            ));
         }
+    }
+
+
+    private CardProfile getCardProfile(String cardId) {
+        try (Jedis jedis = jedisPool.getResource()) {
+            String profileKey = "card_profile:" + cardId;
+            String profileJson = jedis.get(profileKey);
+
+            if (profileJson != null) {
+                return objectMapper.readValue(profileJson, CardProfile.class);
+            } else {
+                System.err.println("⚠️  No card profile found for: " + cardId);
+                return null;
+            }
+
+        } catch (Exception e) {
+            System.err.println("❌ Failed to get card profile for " + cardId + ": " + e.getMessage());
+            return null;
+        }
+    }
+
+
+    private void updateAmountStatistics(Transaction transaction, CardProfile cardProfile) {
+        try (Jedis jedis = jedisPool.getResource()) {
+            String statsKey = AMOUNT_STATS_PREFIX + transaction.cardId;
+
+            AmountStatistics stats = getAmountStatistics(statsKey, jedis);
+
+            stats.recentAmounts.add(transaction.amount);
+            stats.totalTransactions++;
+
+            if (stats.recentAmounts.size() > MAX_RECENT_AMOUNTS) {
+                stats.recentAmounts.remove(0);
+            }
+
+            double currentAverage = stats.recentAmounts.stream()
+                    .mapToDouble(Double::doubleValue)
+                    .average()
+                    .orElse(cardProfile.avgAmount);
+
+            stats.currentAverage = currentAverage;
+            stats.lastUpdateTime = System.currentTimeMillis();
+
+            String statsJson = objectMapper.writeValueAsString(stats);
+            jedis.setex(statsKey, AMOUNT_STATS_TTL, statsJson);
+
+        } catch (Exception e) {
+            System.err.println("Failed to update amount statistics: " + e.getMessage());
+        }
+    }
+
+
+    private AmountStatistics getAmountStatistics(String statsKey, Jedis jedis) {
+        try {
+            String statsJson = jedis.get(statsKey);
+            if (statsJson != null) {
+                return objectMapper.readValue(statsJson, AmountStatistics.class);
+            }
+        } catch (Exception e) {
+        }
+
+        return new AmountStatistics();
     }
 
     @Override
     public void close() throws Exception {
         if (jedisPool != null) {
             jedisPool.close();
-
         }
+        super.close();
+    }
+
+    public static class AmountStatistics {
+        public java.util.List<Double> recentAmounts = new java.util.ArrayList<>();
+        public double currentAverage = 0.0;
+        public int totalTransactions = 0;
+        public long lastUpdateTime = 0;
+
+        public AmountStatistics() {}
     }
 }

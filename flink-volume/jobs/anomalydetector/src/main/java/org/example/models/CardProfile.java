@@ -21,21 +21,41 @@ public class CardProfile {
     @JsonProperty("monthly_limit")
     public double monthlyLimit;
 
+    @JsonProperty("transaction_limit")
+    public double transactionLimit;
+
+    @JsonProperty("is_active")
+    public boolean isActive;
+
+    @JsonProperty("current_balance")
+    public double currentBalance;
+
+    @JsonProperty("expiry_date")
+    public String expiryDate;
+
     public CardProfile() {}
 
     public CardProfile(String cardId, String userId, double avgAmount, double stdAmount,
-                       double dailyLimit, double monthlyLimit) {
+                       double dailyLimit, double monthlyLimit, double transactionLimit,
+                       boolean isActive, double currentBalance, String expiryDate) {
         this.cardId = cardId;
         this.userId = userId;
         this.avgAmount = avgAmount;
         this.stdAmount = stdAmount;
         this.dailyLimit = dailyLimit;
         this.monthlyLimit = monthlyLimit;
+        this.transactionLimit = transactionLimit;
+        this.isActive = isActive;
+        this.currentBalance = currentBalance;
+        this.expiryDate = expiryDate;
     }
 
     @Override
     public String toString() {
-        return String.format("CardProfile{cardId='%s', userId='%s', avgAmount=%.2f, stdAmount=%.2f, dailyLimit=%.2f, monthlyLimit=%.2f}",
-                cardId, userId, avgAmount, stdAmount, dailyLimit, monthlyLimit);
+        return String.format("CardProfile{cardId='%s', userId='%s', avgAmount=%.2f, stdAmount=%.2f, " +
+                        "dailyLimit=%.2f, monthlyLimit=%.2f, transactionLimit=%.2f, " +
+                        "isActive=%s, currentBalance=%.2f, expiryDate='%s'}",
+                cardId, userId, avgAmount, stdAmount, dailyLimit, monthlyLimit,
+                transactionLimit, isActive, currentBalance, expiryDate);
     }
 }
