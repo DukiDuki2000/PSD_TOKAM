@@ -125,7 +125,9 @@ class AnomalyGenerator:
         """Anomalia wzorca bankomatowego"""
         atm_amounts = [20.00, 50.00, 100.00, 200.00, 300.00, 500.00]
         num_attempts = random.randint(3, 6)
-
+        available_amounts = [amt for amt in atm_amounts if amt <= card_profile.transaction_limit]
+        if not available_amounts:
+            available_amounts = [20.00, 50.00]
         atm_plan = {
             "type": "atm_pattern",
             "user_id": card_profile.user_id,
@@ -133,7 +135,7 @@ class AnomalyGenerator:
             "location": transaction.location,
             "count": num_attempts,
             "intervals_seconds": [random.randint(5, 20) for _ in range(num_attempts)],
-            "amounts": [random.choice(atm_amounts) for _ in range(num_attempts)]
+            "amounts": [random.choice(available_amounts) for _ in range(num_attempts)]
         }
         return atm_plan
 

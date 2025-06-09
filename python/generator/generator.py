@@ -34,7 +34,7 @@ normal_categories_weighted = [
     "jewelry", "sports_goods", "beauty_salon",
     "auto_service", "hotel", "travel_agency",
     "insurance", "bank_service", "medical",
-    "education", "charity", "parking"
+    "education", "charity", "parking","atm_withdrawal"
 ]
 class TransactionGenerator:
     def __init__(self, num_cards: int = 10000, num_users: int = 2000):
@@ -65,7 +65,7 @@ class TransactionGenerator:
                                    'atm_pattern': AnomalyGenerator.atm_pattern_anomaly,
                                    'unusual_merchant_anomaly': AnomalyGenerator.unusual_merchant_anomaly
                                    }
-
+        self.atm_amounts = [20.00, 50.00, 100.00, 200.00, 300.00, 500.00, 1000.00]
         self.card_generator = CardGenerator(REDIS_HOST, REDIS_PORT, REDIS_DB, REDIS_PASSWORD)
         self.card_ids = self.card_generator.get_all_card_ids()
 
@@ -97,19 +97,29 @@ class TransactionGenerator:
             print(f"Failed to send transaction to Kafka: {e}")
 
     def generate_transaction(self, card_profile: CardProfile) -> Transaction:
-        min_amount = max(5.0, card_profile.avg_amount - card_profile.std_amount)
-        max_amount = card_profile.avg_amount + card_profile.std_amount
-        amount = round(random.uniform(min_amount, max_amount), 2)
-        max_allowed = round(card_profile.daily_limit * 0.1, 2)
-        amount = min(amount, max_allowed)
+        category = random.choice(normal_categories_weighted)
+
+        if category == "atm_withdrawal":
+            amount = random.choice(self.atm_amounts)
+            max_allowed = min(card_profile.current_balance, card_profile.transaction_limit,
+                              card_profile.daily_limit * 0.3)
+            if amount > max_allowed:
+                available_amounts = [amt for amt in self.atm_amounts if amt <= max_allowed]
+                if available_amounts:
+                    amount = random.choice(available_amounts)
+                else:
+                    amount = 20.00
+        else:
+            min_amount = max(5.0, card_profile.avg_amount - card_profile.std_amount)
+            max_amount = card_profile.avg_amount + card_profile.std_amount
+            amount = round(random.uniform(min_amount, max_amount), 2)
+            max_allowed = round(card_profile.daily_limit * 0.1, 2)
+            amount = min(amount, max_allowed)
 
         if random.random() < 0.85:
             location = LocationUtils.get_random_polish_city()
         else:
             location = LocationUtils.get_random_foreign_city()
-
-
-        category = random.choice(normal_categories_weighted)
 
         transaction = Transaction(
             transaction_id=f"tx_{uuid.uuid4().hex[:12]}",
@@ -122,7 +132,6 @@ class TransactionGenerator:
         )
 
         return transaction
-
 
 
     def execute_plan(self, plan: dict):
@@ -176,15 +185,14 @@ class TransactionGenerator:
                 return []
 
         if not card_profile.is_active:
-            print("[ANOMALY] not_active_card")
-            result = self.anomaly_generators['not_active'](transaction, card_profile)
+            if card_profile.expiry_date <= datetime.now():
+                print("[ANOMALY] expired_card")
+                result = self.anomaly_generators['expired_card'](transaction, card_profile)
+            else:
+                print("[ANOMALY] not_active_card")
+                result = self.anomaly_generators['not_active'](transaction, card_profile)
             return [result]
 
-
-        if card_profile.expiry_date <= datetime.now():
-            print("[ANOMALY] expired_card")
-            result = self.anomaly_generators['expired_card'](transaction, card_profile)
-            return [result]
 
         if random.random() < 0.05:
             anomaly_types = list(self.anomaly_generators.keys())
