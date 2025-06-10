@@ -1,6 +1,7 @@
 Linki:
 * kafdrop:"http://localhost:9000"
-* python: "http://localhost:8080"
+* python-generator: "http://localhost:8080"
+* visualization: "http://localhost:5000"
 * redis_insight:"http://localhost:5540" config:  redis:6379,defult,admin
 * flink:"http://localhost:8081"
 
