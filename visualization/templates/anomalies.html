@@ -1,0 +1,447 @@
+{% extends "base.html" %}
+
+{% block title %}Anomalies - Transaction Monitor{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">🚨 Anomaly Detection</h1>
+    <p class="page-subtitle">Real-time anomaly alerts from Flink processing</p>
+</div>
+
+<!-- Anomaly Summary Stats -->
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem;">
+    <div style="background: linear-gradient(135deg, #e74c3c, #c0392b); color: white; padding: 1.5rem; border-radius: 16px; text-align: center;">
+        <div style="font-size: 2rem; font-weight: 700;" id="totalAnomalies">-</div>
+        <div style="opacity: 0.9;">Total Anomalies</div>
+    </div>
+    <div style="background: linear-gradient(135deg, #f39c12, #e67e22); color: white; padding: 1.5rem; border-radius: 16px; text-align: center;">
+        <div style="font-size: 2rem; font-weight: 700;" id="criticalAnomalies">-</div>
+        <div style="opacity: 0.9;">Critical Alerts</div>
+    </div>
+    <div style="background: linear-gradient(135deg, #9b59b6, #8e44ad); color: white; padding: 1.5rem; border-radius: 16px; text-align: center;">
+        <div style="font-size: 2rem; font-weight: 700;" id="affectedCards">-</div>
+        <div style="opacity: 0.9;">Affected Cards</div>
+    </div>
+    <div style="background: linear-gradient(135deg, #3498db, #2980b9); color: white; padding: 1.5rem; border-radius: 16px; text-align: center;">
+        <div style="font-size: 2rem; font-weight: 700;" id="anomalyTypes">-</div>
+        <div style="opacity: 0.9;">Anomaly Types</div>
+    </div>
+</div>
+
+<div class="panel">
+    <div class="panel-header">
+        <h2 class="panel-title">Anomaly List</h2>
+        <div style="display: flex; gap: 1rem; align-items: center;">
+            <select id="typeFilter" style="padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px;">
+                <option value="">All Types</option>
+                <option value="AMOUNT_ANOMALY">Amount Anomaly</option>
+                <option value="INACTIVE_CARD">Inactive Card</option>
+                <option value="EXPIRED_CARD">Expired Card</option>
+                <option value="INSUFFICIENT_FUNDS">Insufficient Funds</option>
+                <option value="TRANSACTION_LIMIT_EXCEEDED">Limit Exceeded</option>
+                <option value="UNUSUAL_MERCHANT">Unusual Merchant</option>
+                <option value="MICRO_TRANSACTIONS_PATTERN">Micro Transactions</option>
+                <option value="RAPID_GEO_CHANGE_PATTERN">Rapid Geo Change</option>
+                <option value="DUPLICATE_TRANSACTIONS_PATTERN">Duplicate Transactions</option>
+                <option value="ROUND_AMOUNTS">Round Amounts</option>
+                <option value="ATM_PATTERN">ATM Pattern</option>
+            </select>
+            <select id="severityFilter" style="padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px;">
+                <option value="">All Severities</option>
+                <option value="critical">Critical (≥0.9)</option>
+                <option value="high">High (0.7-0.9)</option>
+                <option value="medium">Medium (0.5-0.7)</option>
+                <option value="low">Low (<0.5)</option>
+            </select>
+            <input type="text" id="searchInput" placeholder="Search card/user/description..."
+                   style="padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; width: 250px;">
+            <button class="btn btn-primary" onclick="performSearch()">🔍 Search</button>
+            <button class="btn btn-secondary" onclick="clearFilters()">🔄 Clear</button>
+        </div>
+    </div>
+
+    <div id="searchInfo" style="margin-bottom: 1rem; display: none;">
+        <div style="background: #fff3cd; padding: 1rem; border-radius: 8px; color: #856404;">
+            <span id="searchResultText"></span>
+            <button onclick="clearFilters()" style="margin-left: 1rem; background: none; border: none; color: #856404; cursor: pointer; text-decoration: underline;">Clear filters</button>
+        </div>
+    </div>
+
+    <div id="anomaliesTable">
+        <div class="loading">Loading anomalies...</div>
+    </div>
+
+    <div id="anomaliesPagination"></div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let currentPage = 1;
+    let totalAnomalies = 0;
+    let totalPages = 0;
+    let currentFilters = {
+        type: '',
+        severity: '',
+        search: ''
+    };
+    let isFiltered = false;
+    let lastScrollPosition = 0;
+    let autoRefreshEnabled = true;
+    let refreshInterval;
+
+    document.addEventListener('DOMContentLoaded', function() {
+        loadAnomalies();
+        loadAnomalyStats();
+        startAutoRefresh();
+
+        // Zapisuj pozycję przewijania
+        window.addEventListener('scroll', function() {
+            lastScrollPosition = window.pageYOffset || document.documentElement.scrollTop;
+        });
+
+        // Event listeners
+        document.getElementById('searchInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                performSearch();
+            }
+        });
+
+        document.getElementById('typeFilter').addEventListener('change', performSearch);
+        document.getElementById('severityFilter').addEventListener('change', performSearch);
+
+        addRefreshControls();
+    });
+
+    function startAutoRefresh() {
+        if (refreshInterval) clearInterval(refreshInterval);
+
+        refreshInterval = setInterval(() => {
+            if (autoRefreshEnabled) {
+                loadAnomalies(currentPage, true); // true = silent refresh
+                loadAnomalyStats(true); // true = silent refresh
+            }
+        }, 10000);
+    }
+
+    function addRefreshControls() {
+        const headerDiv = document.querySelector('.panel-header div');
+
+        const pauseButton = document.createElement('button');
+        pauseButton.className = 'btn btn-secondary';
+        pauseButton.id = 'pauseRefreshBtn';
+        pauseButton.style.marginLeft = '1rem';
+        pauseButton.onclick = () => toggleAutoRefresh();
+        pauseButton.innerHTML = '⏸️ Pause Auto-refresh';
+
+        headerDiv.appendChild(pauseButton);
+    }
+
+    function toggleAutoRefresh() {
+        autoRefreshEnabled = !autoRefreshEnabled;
+        const button = document.getElementById('pauseRefreshBtn');
+
+        if (autoRefreshEnabled) {
+            button.innerHTML = '⏸️ Pause Auto-refresh';
+            button.className = 'btn btn-secondary';
+        } else {
+            button.innerHTML = '▶️ Resume Auto-refresh';
+            button.className = 'btn btn-warning';
+        }
+    }
+
+    async function loadAnomalies(page = 1, silentRefresh = false) {
+        try {
+            if (!silentRefresh) {
+                showLoading('anomaliesTable');
+            }
+
+            const params = new URLSearchParams({
+                page: page,
+                per_page: 50
+            });
+
+            if (currentFilters.type) params.append('type', currentFilters.type);
+            if (currentFilters.severity) params.append('severity', currentFilters.severity);
+            if (currentFilters.search) params.append('search', currentFilters.search);
+
+            const response = await fetch(`/api/anomalies?${params}`);
+            if (!response.ok) throw new Error('API Error');
+
+            const data = await response.json();
+
+            totalAnomalies = data.total;
+            totalPages = data.total_pages;
+            currentPage = data.page;
+            isFiltered = !!(currentFilters.type || currentFilters.severity || currentFilters.search);
+
+            updateConnectionStatus(true);
+            displayAnomalies(data.anomalies);
+            updatePagination();
+            updateSearchInfo();
+
+            // Przywróć pozycję przewijania tylko przy silent refresh
+            if (silentRefresh && lastScrollPosition > 0) {
+                setTimeout(() => {
+                    window.scrollTo(0, lastScrollPosition);
+                }, 100);
+            }
+
+        } catch (error) {
+            console.error('Error loading anomalies:', error);
+            updateConnectionStatus(false);
+            if (!silentRefresh) {
+                showError('anomaliesTable', 'Failed to load anomalies');
+            }
+        }
+    }
+
+    async function loadAnomalyStats(silentRefresh = false) {
+        try {
+            const response = await fetch('/api/anomaly-stats');
+            if (!response.ok) throw new Error('API Error');
+
+            const stats = await response.json();
+            updateAnomalyStats(stats);
+
+        } catch (error) {
+            if (!silentRefresh) {
+                console.error('Error loading anomaly stats:', error);
+            }
+        }
+    }
+
+    function updateAnomalyStats(stats) {
+        document.getElementById('totalAnomalies').textContent = stats.total_anomalies.toLocaleString();
+
+        const criticalCount = stats.severity_distribution.CRITICAL || 0;
+        document.getElementById('criticalAnomalies').textContent = criticalCount.toLocaleString();
+
+        const affectedCardsCount = Object.keys(stats.top_affected_cards || {}).length;
+        document.getElementById('affectedCards').textContent = affectedCardsCount.toLocaleString();
+
+        const typesCount = Object.keys(stats.anomaly_types || {}).length;
+        document.getElementById('anomalyTypes').textContent = typesCount.toLocaleString();
+    }
+
+    function performSearch() {
+        currentFilters.type = document.getElementById('typeFilter').value;
+        currentFilters.severity = document.getElementById('severityFilter').value;
+        currentFilters.search = document.getElementById('searchInput').value.trim();
+
+        currentPage = 1;
+        lastScrollPosition = 0; // Reset scroll when searching
+        loadAnomalies(1);
+    }
+
+    function clearFilters() {
+        currentFilters = { type: '', severity: '', search: '' };
+
+        document.getElementById('typeFilter').value = '';
+        document.getElementById('severityFilter').value = '';
+        document.getElementById('searchInput').value = '';
+
+        currentPage = 1;
+        lastScrollPosition = 0; // Reset scroll when clearing filters
+        loadAnomalies(1);
+    }
+
+    function updateSearchInfo() {
+        const searchInfo = document.getElementById('searchInfo');
+        const searchResultText = document.getElementById('searchResultText');
+
+        if (isFiltered) {
+            let filterParts = [];
+            if (currentFilters.type) filterParts.push(`Type: "${currentFilters.type}"`);
+            if (currentFilters.severity) filterParts.push(`Severity: "${currentFilters.severity}"`);
+            if (currentFilters.search) filterParts.push(`Search: "${currentFilters.search}"`);
+
+            const filterText = filterParts.join(' + ');
+            searchResultText.textContent = `${filterText} - Found ${totalAnomalies} anomalies`;
+            searchInfo.style.display = 'block';
+        } else {
+            searchInfo.style.display = 'none';
+        }
+    }
+
+    function updatePagination() {
+        const headerEl = document.querySelector('.panel-header h2');
+
+        if (isFiltered) {
+            headerEl.textContent = `Anomaly List (${totalAnomalies} filtered results)`;
+        } else {
+            headerEl.textContent = `Anomaly List (${totalAnomalies} total anomalies)`;
+        }
+
+        if (totalPages <= 1) {
+            document.getElementById('anomaliesPagination').innerHTML = '';
+            return;
+        }
+
+        const paginationHTML = `
+            <div style="display: flex; gap: 0.5rem; align-items: center; justify-content: center; margin-top: 1rem; padding: 1rem;">
+                <button class="btn btn-secondary" onclick="changePage(${currentPage - 1})" ${currentPage <= 1 ? 'disabled' : ''}>
+                    ← Previous
+                </button>
+                <span style="margin: 0 1rem;">
+                    Page ${currentPage} of ${totalPages}
+                </span>
+                <button class="btn btn-secondary" onclick="changePage(${currentPage + 1})" ${currentPage >= totalPages ? 'disabled' : ''}>
+                    Next →
+                </button>
+            </div>
+        `;
+
+        document.getElementById('anomaliesPagination').innerHTML = paginationHTML;
+    }
+
+    function changePage(page) {
+        currentPage = page;
+        lastScrollPosition = 0; // Reset scroll when manually changing pages
+        loadAnomalies(page, false);
+    }
+
+    function displayAnomalies(anomalies) {
+        const tableEl = document.getElementById('anomaliesTable');
+
+        if (anomalies.length === 0) {
+            const emptyMessage = isFiltered ? 'No anomalies match your criteria' : 'No anomalies detected yet';
+            tableEl.innerHTML = `<div class="empty-state"><h3>No anomalies</h3><p>${emptyMessage}</p></div>`;
+            return;
+        }
+
+        const tableHTML = `
+            <table class="table table-clickable">
+                <thead>
+                    <tr>
+                        <th>Alert ID</th>
+                        <th>Type</th>
+                        <th>Severity</th>
+                        <th>Card/User</th>
+                        <th>Description</th>
+                        <th>Location</th>
+                        <th>Time</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${anomalies.map(anomaly => {
+                        const severity = anomaly.severity || 0;
+                        const severityLevel = getSeverityLevel(severity);
+                        const severityClass = getSeverityClass(severity);
+
+                        return `
+                            <tr onclick="viewAnomaly('${anomaly.alert_id}')" style="cursor: pointer;">
+                                <td>
+                                    <code style="background: #f8f9fa; padding: 0.2rem 0.5rem; border-radius: 4px;">
+                                        ${highlightSearchTerm(anomaly.alert_id || '', currentFilters.search)}
+                                    </code>
+                                </td>
+                                <td>
+                                    <span class="badge ${getTypeClass(anomaly.anomaly_type)}">
+                                        ${getTypeIcon(anomaly.anomaly_type)} ${formatAnomalyType(anomaly.anomaly_type)}
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="badge ${severityClass}" style="min-width: 80px;">
+                                        ${severityLevel} (${(severity * 100).toFixed(0)}%)
+                                    </span>
+                                </td>
+                                <td>
+                                    <div>
+                                        <a href="/card/${anomaly.card_id}" onclick="event.stopPropagation();" style="font-size: 0.9rem;">
+                                            💳 ${highlightSearchTerm(anomaly.card_id || '', currentFilters.search)}
+                                        </a>
+                                    </div>
+                                    <div>
+                                        <a href="/user/${anomaly.user_id}" onclick="event.stopPropagation();" style="font-size: 0.9rem;">
+                                            👤 ${highlightSearchTerm(anomaly.user_id || '', currentFilters.search)}
+                                        </a>
+                                    </div>
+                                </td>
+                                <td style="max-width: 400px;">
+                                    <div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${anomaly.description}">
+                                        ${highlightSearchTerm(anomaly.description || '', currentFilters.search)}
+                                    </div>
+                                </td>
+                                <td class="text-muted">
+                                    ${anomaly.location ? `📍 ${anomaly.location.city}, ${anomaly.location.country}` : 'Unknown'}
+                                </td>
+                                <td class="text-muted">
+                                    ${formatDate(anomaly.timestamp)}
+                                </td>
+                            </tr>
+                        `;
+                    }).join('')}
+                </tbody>
+            </table>
+        `;
+
+        tableEl.innerHTML = tableHTML;
+    }
+
+    // Pozostałe funkcje pozostają bez zmian...
+    function getSeverityLevel(severity) {
+        if (severity >= 0.9) return 'CRITICAL';
+        if (severity >= 0.7) return 'HIGH';
+        if (severity >= 0.5) return 'MEDIUM';
+        return 'LOW';
+    }
+
+    function getSeverityClass(severity) {
+        if (severity >= 0.9) return 'badge-danger';
+        if (severity >= 0.7) return 'badge-warning';
+        if (severity >= 0.5) return 'badge-info';
+        return 'badge-secondary';
+    }
+
+    function getTypeClass(type) {
+        const typeClasses = {
+            'AMOUNT_ANOMALY': 'badge-warning',
+            'INACTIVE_CARD': 'badge-danger',
+            'EXPIRED_CARD': 'badge-danger',
+            'INSUFFICIENT_FUNDS': 'badge-warning',
+            'TRANSACTION_LIMIT_EXCEEDED': 'badge-warning',
+            'UNUSUAL_MERCHANT': 'badge-info',
+            'MICRO_TRANSACTIONS_PATTERN': 'badge-secondary',
+            'RAPID_GEO_CHANGE_PATTERN': 'badge-warning',
+            'DUPLICATE_TRANSACTIONS_PATTERN': 'badge-danger',
+            'ROUND_AMOUNTS_PATTERN': 'badge-secondary',
+            'ATM_PATTERN_PATTERN': 'badge-info'
+        };
+        return typeClasses[type] || 'badge-secondary';
+    }
+
+    function getTypeIcon(type) {
+        const typeIcons = {
+            'AMOUNT_ANOMALY': '💰',
+            'INACTIVE_CARD': '🚫',
+            'EXPIRED_CARD': '⏰',
+            'INSUFFICIENT_FUNDS': '💸',
+            'TRANSACTION_LIMIT_EXCEEDED': '🚨',
+            'UNUSUAL_MERCHANT': '🏪',
+            'MICRO_TRANSACTIONS_PATTERN': '🔬',
+            'RAPID_GEO_CHANGE_PATTERN': '🌍',
+            'DUPLICATE_TRANSACTION_PATTERN': '🔄',
+            'ROUND_AMOUNTS_PATTERN': '🎯',
+            'ATM_PATTERN_PATTERN': '🏧'
+        };
+        return typeIcons[type] || '⚠️';
+    }
+
+    function formatAnomalyType(type) {
+        if (!type) return 'Unknown';
+        return type.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, l => l.toUpperCase());
+    }
+
+    function highlightSearchTerm(text, searchTerm) {
+        if (!searchTerm || !text) return text;
+
+        const regex = new RegExp(`(${searchTerm})`, 'gi');
+        return text.replace(regex, '<mark style="background: yellow; padding: 0.1rem;">$1</mark>');
+    }
+
+    function viewAnomaly(alertId) {
+        window.location.href = `/anomaly/${alertId}`;
+    }
+</script>
+{% endblock %}

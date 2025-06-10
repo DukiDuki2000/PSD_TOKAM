@@ -1,0 +1,336 @@
+{% extends "base.html" %}
+
+{% block title %}Users - Transaction Monitor{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">👥 User Management</h1>
+    <p class="page-subtitle">Overview of all users and their activity</p>
+</div>
+
+<!-- Summary Stats -->
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem;">
+    <div style="background: linear-gradient(135deg, #667eea, #764ba2); color: white; padding: 1.5rem; border-radius: 16px; text-align: center;">
+        <div style="font-size: 2rem; font-weight: 700;" id="totalUsers">-</div>
+        <div style="opacity: 0.9;">Total Users</div>
+    </div>
+    <div style="background: linear-gradient(135deg, #f093fb, #f5576c); color: white; padding: 1.5rem; border-radius: 16px; text-align: center;">
+        <div style="font-size: 2rem; font-weight: 700;" id="activeUsers">-</div>
+        <div style="opacity: 0.9;">Active Users</div>
+    </div>
+    <div style="background: linear-gradient(135deg, #4facfe, #00f2fe); color: white; padding: 1.5rem; border-radius: 16px; text-align: center;">
+        <div style="font-size: 2rem; font-weight: 700;" id="avgCardsPerUser">-</div>
+        <div style="opacity: 0.9;">Avg Cards/User</div>
+    </div>
+    <div style="background: linear-gradient(135deg, #43e97b, #38f9d7); color: white; padding: 1.5rem; border-radius: 16px; text-align: center;">
+        <div style="font-size: 2rem; font-weight: 700;" id="totalTransactions">-</div>
+        <div style="opacity: 0.9;">Total Transactions</div>
+    </div>
+</div>
+
+<div class="panel">
+    <div class="panel-header">
+        <h2 class="panel-title">User List</h2>
+        <div style="display: flex; gap: 1rem; align-items: center;">
+            <select id="activityFilter" style="padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px;">
+                <option value="">All Users</option>
+                <option value="active">Active Only</option>
+                <option value="inactive">No Transactions</option>
+            </select>
+            <input type="text" id="searchInput" placeholder="Search users or cards..."
+                   style="padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; width: 250px;">
+            <button class="btn btn-primary" onclick="performSearch()">🔍 Search</button>
+            <button class="btn btn-secondary" onclick="clearFilters()">🔄 Clear</button>
+        </div>
+    </div>
+
+    <div id="searchInfo" style="margin-bottom: 1rem; display: none;">
+        <div style="background: #e3f2fd; padding: 1rem; border-radius: 8px; color: #1976d2;">
+            <span id="searchResultText"></span>
+            <button onclick="clearFilters()" style="margin-left: 1rem; background: none; border: none; color: #1976d2; cursor: pointer; text-decoration: underline;">Clear search</button>
+        </div>
+    </div>
+
+    <div id="usersTable">
+        <div class="loading">Loading users...</div>
+    </div>
+
+    <div id="usersPagination"></div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let currentPage = 1;
+    let totalUsers = 0;
+    let totalPages = 0;
+    let currentFilters = {
+        search: '',
+        activity: ''
+    };
+    let isFiltered = false;
+
+    document.addEventListener('DOMContentLoaded', function() {
+        loadUsers();
+
+        // Enter key dla wyszukiwania
+        document.getElementById('searchInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                performSearch();
+            }
+        });
+
+        // Change event dla filtru aktywności
+        document.getElementById('activityFilter').addEventListener('change', function() {
+            performSearch();
+        });
+    });
+
+    async function loadUsers(page = 1) {
+        try {
+            showLoading('usersTable');
+
+            // Buduj URL z parametrami
+            const params = new URLSearchParams({
+                page: page,
+                per_page: 50
+            });
+
+            if (currentFilters.search) {
+                params.append('search', currentFilters.search);
+            }
+            if (currentFilters.activity) {
+                params.append('activity', currentFilters.activity);
+            }
+
+            const response = await fetch(`/api/users?${params}`);
+            if (!response.ok) throw new Error('API Error');
+
+            const data = await response.json();
+
+            totalUsers = data.total;
+            totalPages = data.total_pages;
+            currentPage = data.page;
+            isFiltered = data.filtered || false;
+
+            updateConnectionStatus(true);
+            updateSummaryStats(data.users);
+            displayUsers(data.users);
+            updatePagination();
+            updateSearchInfo();
+
+        } catch (error) {
+            console.error('Error loading users:', error);
+            updateConnectionStatus(false);
+            showError('usersTable', 'Failed to load users');
+        }
+    }
+
+    function performSearch() {
+        // Pobierz wartości filtrów
+        currentFilters.search = document.getElementById('searchInput').value.trim();
+        currentFilters.activity = document.getElementById('activityFilter').value;
+
+        // Resetuj do pierwszej strony
+        currentPage = 1;
+
+        // Załaduj z nowymi filtrami
+        loadUsers(1);
+    }
+
+    function clearFilters() {
+        currentFilters.search = '';
+        currentFilters.activity = '';
+
+        document.getElementById('searchInput').value = '';
+        document.getElementById('activityFilter').value = '';
+
+        currentPage = 1;
+        loadUsers(1);
+    }
+
+    function updateSearchInfo() {
+        const searchInfo = document.getElementById('searchInfo');
+        const searchResultText = document.getElementById('searchResultText');
+
+        if (isFiltered && (currentFilters.search || currentFilters.activity)) {
+            let filterText = '';
+            if (currentFilters.search && currentFilters.activity) {
+                filterText = `Search: "${currentFilters.search}" + Activity: "${currentFilters.activity}"`;
+            } else if (currentFilters.search) {
+                filterText = `Search: "${currentFilters.search}"`;
+            } else if (currentFilters.activity) {
+                filterText = `Activity: "${currentFilters.activity}"`;
+            }
+
+            searchResultText.textContent = `${filterText} - Found ${totalUsers} users`;
+            searchInfo.style.display = 'block';
+        } else {
+            searchInfo.style.display = 'none';
+        }
+    }
+
+    function updateSummaryStats(currentUsers) {
+        const activeUsers = currentUsers.filter(user => user.transaction_count > 0);
+        const currentTotalTransactions = currentUsers.reduce((sum, user) => sum + user.transaction_count, 0);
+        const currentTotalCards = currentUsers.reduce((sum, user) => sum + user.cards_count, 0);
+        const currentAvgCardsPerUser = currentUsers.length > 0 ? (currentTotalCards / currentUsers.length).toFixed(1) : 0;
+        if (isFiltered) {
+            document.getElementById('totalUsers').textContent = totalUsers;
+            document.getElementById('activeUsers').textContent = activeUsers.length;
+            document.getElementById('avgCardsPerUser').textContent = currentAvgCardsPerUser;
+            document.getElementById('totalTransactions').textContent = currentTotalTransactions.toLocaleString();
+        } else {
+            document.getElementById('totalUsers').textContent = totalUsers;
+            document.getElementById('activeUsers').textContent = activeUsers.length;
+            document.getElementById('avgCardsPerUser').textContent = currentAvgCardsPerUser;
+            document.getElementById('totalTransactions').textContent = currentTotalTransactions.toLocaleString();
+        }
+    }
+
+    function updatePagination() {
+        const headerEl = document.querySelector('.panel-header h2');
+
+        if (isFiltered) {
+            headerEl.textContent = `User List (${totalUsers} filtered results)`;
+        } else {
+            headerEl.textContent = `User List (${totalUsers} total users)`;
+        }
+
+        if (totalPages <= 1) {
+            document.getElementById('usersPagination').innerHTML = '';
+            return;
+        }
+
+        const paginationHTML = `
+            <div style="display: flex; gap: 0.5rem; align-items: center; justify-content: center; margin-top: 1rem; padding: 1rem;">
+                <button class="btn btn-secondary" onclick="loadUsers(${currentPage - 1})" ${currentPage <= 1 ? 'disabled' : ''}>
+                    ← Previous
+                </button>
+                <span style="margin: 0 1rem;">
+                    Page ${currentPage} of ${totalPages}
+                </span>
+                <button class="btn btn-secondary" onclick="loadUsers(${currentPage + 1})" ${currentPage >= totalPages ? 'disabled' : ''}>
+                    Next →
+                </button>
+
+                ${totalPages <= 10 ? `
+                    <select onchange="loadUsers(parseInt(this.value))" style="margin-left: 1rem; padding: 0.5rem;">
+                        ${Array.from({length: totalPages}, (_, i) => i + 1).map(page =>
+                            `<option value="${page}" ${page === currentPage ? 'selected' : ''}>Page ${page}</option>`
+                        ).join('')}
+                    </select>
+                ` : ''}
+            </div>
+        `;
+
+        document.getElementById('usersPagination').innerHTML = paginationHTML;
+    }
+
+    function displayUsers(users) {
+        const tableEl = document.getElementById('usersTable');
+
+        if (users.length === 0) {
+            const emptyMessage = isFiltered ? 'No users match your search criteria' : 'No users found';
+            tableEl.innerHTML = `<div class="empty-state"><h3>No users found</h3><p>${emptyMessage}</p></div>`;
+            return;
+        }
+
+        const tableHTML = `
+            <table class="table table-clickable">
+                <thead>
+                    <tr>
+                        <th>User ID</th>
+                        <th>Cards Count</th>
+                        <th>Transaction Count</th>
+                        <th>Anomaly Count</th>
+                        <th>Activity Level</th>
+                        <th>User Status</th>
+                        <th>Cards Overview</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${users.map(user => {
+                        const isActive = user.transaction_count > 0;
+                        const activityLevel = getActivityLevel(user.transaction_count);
+
+                        return `
+                            <tr onclick="viewUser('${user.user_id}')">
+                                <td>
+                                    <code style="background: #f8f9fa; padding: 0.2rem 0.5rem; border-radius: 4px;">
+                                        ${highlightSearchTerm(user.user_id, currentFilters.search)}
+                                    </code>
+                                </td>
+                                <td>
+                                    <span class="badge badge-info">
+                                        💳 ${user.cards_count} cards
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="badge ${user.transaction_count > 0 ? 'badge-success' : 'badge-secondary'}">
+                                        📊 ${user.transaction_count} transactions
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="badge ${user.anomaly_count > 10 ? 'badge-danger' : user.anomaly_count > 5 ? 'badge-warning' : user.anomaly_count > 0 ? 'badge-info' : 'badge-success'}">
+                                        🚨 ${user.anomaly_count || 0} anomalies
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="badge ${activityLevel.class}">
+                                        ${activityLevel.icon} ${activityLevel.label}
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="badge ${isActive ? 'badge-success' : 'badge-warning'}">
+                                        ${isActive ? '✅ Active' : '⚠️ Inactive'}
+                                    </span>
+                                </td>
+                                <td class="text-muted">
+                                    <div style="display: flex; flex-wrap: wrap; gap: 0.25rem;">
+                                        ${user.cards.slice(0, 3).map(cardId => `
+                                            <code style="font-size: 0.7rem; background: #e9ecef; padding: 0.1rem 0.3rem; border-radius: 3px;">
+                                                ${highlightSearchTerm(cardId, currentFilters.search)}
+                                            </code>
+                                        `).join('')}
+                                        ${user.cards.length > 3 ? `<span style="font-size: 0.8rem;">+${user.cards.length - 3} more</span>` : ''}
+                                    </div>
+                                </td>
+                            </tr>
+                        `;
+                    }).join('')}
+                </tbody>
+            </table>
+        `;
+
+        tableEl.innerHTML = tableHTML;
+    }
+
+    function getActivityLevel(transactionCount) {
+        if (transactionCount === 0) {
+            return { label: 'No Activity', class: 'badge-secondary', icon: '😴' };
+        } else if (transactionCount < 10) {
+            return { label: 'Low Activity', class: 'badge-warning', icon: '🟡' };
+        } else if (transactionCount < 50) {
+            return { label: 'Medium Activity', class: 'badge-info', icon: '🟠' };
+        } else {
+            return { label: 'High Activity', class: 'badge-success', icon: '🟢' };
+        }
+    }
+
+    function highlightSearchTerm(text, searchTerm) {
+        if (!searchTerm || !text) return text;
+
+        const regex = new RegExp(`(${searchTerm})`, 'gi');
+        return text.replace(regex, '<mark style="background: yellow; padding: 0.1rem;">$1</mark>');
+    }
+
+    function viewUser(userId) {
+        window.location.href = `/user/${userId}`;
+    }
+
+    function refreshUsers() {
+        loadUsers(currentPage);
+    }
+</script>
+{% endblock %}

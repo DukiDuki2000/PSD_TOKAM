@@ -1,0 +1,598 @@
+{% extends "base.html" %}
+
+{% block title %}User Details - Transaction Monitor{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">👤 User Profile</h1>
+    <p class="page-subtitle">User: <code>{{ user_id }}</code></p>
+</div>
+
+<div style="display: grid; grid-template-columns: 2fr 1fr; gap: 2rem;">
+    <div>
+        <!-- User Overview -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">User Overview</h2>
+                <a href="/users" class="btn btn-secondary">← Back to Users</a>
+            </div>
+            
+            <div id="userOverview">
+                <div class="loading">Loading user data...</div>
+            </div>
+        </div>
+
+        <!-- User's Cards -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">💳 User's Cards</h2>
+            </div>
+            
+            <div id="userCards">
+                <div class="loading">Loading cards...</div>
+            </div>
+        </div>
+
+        <!-- Transaction History -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">📊 Recent Transactions</h2>
+            </div>
+            
+            <div id="transactionHistory">
+                <div class="loading">Loading transactions...</div>
+            </div>
+        </div>
+
+        <!-- User Anomalies -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">🚨 User Anomalies</h2>
+            </div>
+
+            <div id="userAnomalies">
+                <div class="loading">Loading anomalies...</div>
+            </div>
+        </div>
+    </div>
+
+    <div>
+        <!-- User Statistics -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">Statistics</h2>
+            </div>
+
+            <div id="userStats">
+                <div class="loading">Loading statistics...</div>
+            </div>
+        </div>
+
+        <!-- Countries Visited -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">🌍 Countries Visited</h2>
+            </div>
+
+            <div style="height: 250px;">
+                <canvas id="countriesChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Merchant Categories -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">🏪 Spending Categories</h2>
+            </div>
+
+            <div style="height: 250px;">
+                <canvas id="merchantChart"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const userId = '{{ user_id }}';
+    let countriesChart;
+    let merchantChart;
+    let userData = null;
+
+    document.addEventListener('DOMContentLoaded', function() {
+        initializeCharts();
+        loadUserDetails();
+    });
+
+    function initializeCharts() {
+        // Countries Chart
+        const countriesCtx = document.getElementById('countriesChart').getContext('2d');
+        countriesChart = new Chart(countriesCtx, {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Transactions',
+                    data: [],
+                    backgroundColor: 'rgba(54, 162, 235, 0.8)',
+                    borderColor: 'rgba(54, 162, 235, 1)',
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: { y: { beginAtZero: true } }
+            }
+        });
+
+        // Merchant Categories Chart
+        const merchantCtx = document.getElementById('merchantChart').getContext('2d');
+        merchantChart = new Chart(merchantCtx, {
+            type: 'doughnut',
+            data: {
+                labels: [],
+                datasets: [{
+                    data: [],
+                    backgroundColor: [
+                        '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0',
+                        '#9966FF', '#FF9F40', '#FF6384', '#C9CBCF'
+                    ]
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { position: 'bottom' } }
+            }
+        });
+    }
+
+    async function loadUserDetails() {
+        try {
+            showLoading('userOverview');
+            showLoading('userCards');
+            showLoading('userStats');
+            showLoading('transactionHistory');
+            showLoading('userAnomalies');
+
+            const response = await fetch(`/api/user/${userId}`);
+            if (!response.ok) {
+                if (response.status === 404) {
+                    throw new Error('User not found');
+                }
+                throw new Error('API Error');
+            }
+
+            const data = await response.json();
+            userData = data;
+
+            updateConnectionStatus(true);
+            displayUserOverview(data);
+            displayUserCards(data.cards);
+            displayUserStats(data.transaction_stats);
+            displayTransactionHistory(data.transaction_stats);
+            displayUserAnomalies(data.anomalies, data.anomaly_stats);
+            updateCharts(data.transaction_stats);
+
+        } catch (error) {
+            console.error('Error loading user:', error);
+            updateConnectionStatus(false);
+            showError('userOverview', error.message);
+            showError('userCards', error.message);
+            showError('userStats', error.message);
+            showError('transactionHistory', error.message);
+            showError('userAnomalies', error.message);
+        }
+    }
+
+    function displayUserOverview(data) {
+        const overviewHTML = `
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
+                <div>
+                    <h3 style="margin-bottom: 1rem; color: #2c3e50;">User Information</h3>
+                    <table class="table">
+                        <tr>
+                            <td><strong>User ID</strong></td>
+                            <td><code>${data.user_id}</code></td>
+                        </tr>
+                        <tr>
+                            <td><strong>Total Cards</strong></td>
+                            <td>
+                                <span class="badge badge-info">💳 ${data.cards.length} cards</span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><strong>Active Cards</strong></td>
+                            <td>
+                                <span class="badge badge-success">
+                                    ✅ ${data.cards.filter(card => card.is_active).length} active
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><strong>Total Balance</strong></td>
+                            <td class="text-success">
+                                <strong style="font-size: 1.2rem;">
+                                    ${formatAmount(data.cards.reduce((sum, card) => sum + (card.current_balance || 0), 0))}
+                                </strong>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+
+                <div>
+                    <h3 style="margin-bottom: 1rem; color: #2c3e50;">Activity Summary</h3>
+                    <table class="table">
+                        <tr>
+                            <td><strong>Total Transactions</strong></td>
+                            <td>
+                                <span class="badge badge-info">
+                                    📊 ${data.transaction_stats?.total_transactions || 0}
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><strong>Total Spent</strong></td>
+                            <td class="text-success">
+                                <strong>${formatAmount(data.transaction_stats?.total_amount || 0)}</strong>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><strong>Average Transaction</strong></td>
+                            <td class="text-info">
+                                ${formatAmount(data.transaction_stats?.avg_amount || 0)}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><strong>Countries Visited</strong></td>
+                            <td>
+                                <span class="badge badge-warning">
+                                    🌍 ${Object.keys(data.transaction_stats?.countries_visited || {}).length} countries
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><strong>Anomalies Detected</strong></td>
+                            <td>
+                                <span class="badge ${data.anomaly_stats ? (data.anomaly_stats.total_anomalies > 10 ? 'badge-danger' : data.anomaly_stats.total_anomalies > 5 ? 'badge-warning' : 'badge-info') : 'badge-secondary'}">
+                                    🚨 ${data.anomaly_stats ? data.anomaly_stats.total_anomalies : 0} anomalies
+                                </span>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+        `;
+
+        document.getElementById('userOverview').innerHTML = overviewHTML;
+    }
+
+    function displayUserCards(cards) {
+        if (!cards || cards.length === 0) {
+            document.getElementById('userCards').innerHTML = '<div class="empty-state"><h3>No cards</h3><p>This user has no cards</p></div>';
+            return;
+        }
+
+        const cardsHTML = `
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem;">
+                ${cards.map(card => {
+                    const isActive = card.is_active;
+                    const expiryDate = new Date(card.expiry_date);
+                    const isExpired = expiryDate < new Date();
+
+                    return `
+                        <div onclick="viewCard('${card.card_id}')" style="
+                            background: linear-gradient(135deg, ${isActive ? '#667eea, #764ba2' : '#6c757d, #495057'});
+                            color: white;
+                            padding: 1.5rem;
+                            border-radius: 12px;
+                            cursor: pointer;
+                            transition: transform 0.3s ease;
+                            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+                        " onmouseover="this.style.transform='translateY(-5px)'" onmouseout="this.style.transform='translateY(0)'">
+                            <h4 style="margin-bottom: 1rem; font-size: 1.1rem;">${card.card_id}</h4>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                                <span>Balance:</span>
+                                <strong>${formatAmount(card.current_balance)}</strong>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                                <span>Daily Limit:</span>
+                                <span>${formatAmount(card.daily_limit)}</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 1rem;">
+                                <span>Status:</span>
+                                <span>${isActive ? '✅ Active' : '❌ Inactive'}</span>
+                            </div>
+                            ${isExpired ? '<div style="background: rgba(255,255,255,0.2); padding: 0.5rem; border-radius: 6px; text-align: center;"><small>⚠️ Expired</small></div>' : ''}
+                        </div>
+                    `;
+                }).join('')}
+            </div>
+        `;
+
+        document.getElementById('userCards').innerHTML = cardsHTML;
+    }
+
+    function displayUserStats(stats) {
+        if (!stats) {
+            document.getElementById('userStats').innerHTML = '<div class="empty-state"><h3>No transaction data</h3><p>This user has no transaction history</p></div>';
+            return;
+        }
+
+        const approvedCount = stats.status_stats.approved || 0;
+        const declinedCount = stats.status_stats.declined || 0;
+        const declineRate = stats.total_transactions > 0 ?
+            ((declinedCount / stats.total_transactions) * 100).toFixed(1) : 0;
+
+        const statsHTML = `
+            <div style="display: flex; flex-direction: column; gap: 1rem;">
+                <div style="text-align: center; padding: 1rem; background: #e3f2fd; border-radius: 8px;">
+                    <div style="font-size: 2rem; font-weight: 700; color: #1976d2;">${stats.total_transactions}</div>
+                    <div style="color: #1976d2; font-weight: 600;">Total Transactions</div>
+                </div>
+
+                <div style="text-align: center; padding: 1rem; background: #e8f5e8; border-radius: 8px;">
+                    <div style="font-size: 1.5rem; font-weight: 700; color: #2e7d32;">${formatAmount(stats.total_amount)}</div>
+                    <div style="color: #2e7d32; font-weight: 600;">Total Amount</div>
+                </div>
+
+                <div style="text-align: center; padding: 1rem; background: #fff3e0; border-radius: 8px;">
+                    <div style="font-size: 1.5rem; font-weight: 700; color: #f57c00;">${stats.cards_used.length}</div>
+                    <div style="color: #f57c00; font-weight: 600;">Cards Used</div>
+                </div>
+
+                <div style="text-align: center; padding: 1rem; background: ${declineRate > 10 ? '#ffebee' : '#e8f5e8'}; border-radius: 8px;">
+                    <div style="font-size: 1.5rem; font-weight: 700; color: ${declineRate > 10 ? '#c62828' : '#2e7d32'};">${declineRate}%</div>
+                    <div style="color: ${declineRate > 10 ? '#c62828' : '#2e7d32'}; font-weight: 600;">Decline Rate</div>
+                </div>
+            </div>
+
+            <div style="margin-top: 1.5rem;">
+                <h4 style="margin-bottom: 1rem; color: #2c3e50;">Transaction Status</h4>
+                <div style="display: flex; gap: 0.5rem;">
+                    <div style="flex: 1; padding: 1rem; background: #d4edda; border-radius: 8px; text-align: center;">
+                        <div style="font-weight: 700; color: #155724;">${approvedCount}</div>
+                        <div style="color: #155724; font-size: 0.9rem;">✅ Approved</div>
+                    </div>
+                    <div style="flex: 1; padding: 1rem; background: #f8d7da; border-radius: 8px; text-align: center;">
+                        <div style="font-weight: 700; color: #721c24;">${declinedCount}</div>
+                        <div style="color: #721c24; font-size: 0.9rem;">❌ Declined</div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        document.getElementById('userStats').innerHTML = statsHTML;
+    }
+
+    function displayTransactionHistory(stats) {
+        if (!stats || !stats.recent_transactions || stats.recent_transactions.length === 0) {
+            document.getElementById('transactionHistory').innerHTML = '<div class="empty-state"><h3>No transactions</h3><p>No recent transactions found</p></div>';
+            return;
+        }
+
+        const historyHTML = `
+            <table class="table table-clickable">
+                <thead>
+                    <tr>
+                        <th>Transaction ID</th>
+                        <th>Card</th>
+                        <th>Amount</th>
+                        <th>Status</th>
+                        <th>Merchant</th>
+                        <th>Location</th>
+                        <th>Time</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${stats.recent_transactions.map(tx => `
+                        <tr onclick="viewTransaction('${tx.transaction_id}')">
+                            <td>
+                                <code style="background: #f8f9fa; padding: 0.2rem 0.4rem; border-radius: 3px; font-size: 0.8rem;">
+                                    ${tx.transaction_id}
+                                </code>
+                            </td>
+                            <td>
+                                <a href="/card/${tx.card_id}" onclick="event.stopPropagation();" style="font-size: 0.9rem;">
+                                    ${tx.card_id}
+                                </a>
+                            </td>
+                            <td class="${tx.status === 'declined' ? 'text-danger' : 'text-success'}">
+                                <strong>${formatAmount(tx.amount)}</strong>
+                            </td>
+                            <td>
+                                <span class="badge ${tx.status === 'approved' ? 'badge-success' : 'badge-danger'}">
+                                    ${tx.status === 'approved' ? '✅' : '❌'} ${tx.status}
+                                </span>
+                            </td>
+                            <td>
+                                <span class="badge badge-info">${tx.merchant_category || 'general'}</span>
+                            </td>
+                            <td class="text-muted">
+                                📍 ${tx.location?.city || 'Unknown'}, ${tx.location?.country || 'Unknown'}
+                            </td>
+                            <td class="text-muted">
+                                ${formatDate(tx.timestamp)}
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        `;
+
+        document.getElementById('transactionHistory').innerHTML = historyHTML;
+    }
+
+    function displayUserAnomalies(anomalies, anomalyStats) {
+        const anomaliesEl = document.getElementById('userAnomalies');
+
+        if (!anomalies || anomalies.length === 0) {
+            anomaliesEl.innerHTML = '<div class="empty-state"><h3>No anomalies</h3><p>No anomalies detected for this user</p></div>';
+            return;
+        }
+
+        let statsHTML = '';
+        if (anomalyStats) {
+            const affectedCardsCount = anomalyStats.affected_cards ? anomalyStats.affected_cards.length : 0;
+            const topAnomalyTypes = Object.entries(anomalyStats.anomaly_types || {})
+                .sort(([,a], [,b]) => b - a)
+                .slice(0, 3)
+                .map(([type, count]) => `${formatAnomalyType(type)}: ${count}`)
+                .join(', ');
+
+            statsHTML = `
+                <div style="background: #ffebee; padding: 1rem; border-radius: 8px; margin-bottom: 1rem; border-left: 4px solid #e74c3c;">
+                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; text-align: center; margin-bottom: 1rem;">
+                        <div>
+                            <div style="font-size: 1.5rem; font-weight: 700; color: #c62828;">${anomalyStats.total_anomalies}</div>
+                            <div style="color: #c62828; font-size: 0.9rem;">Total Anomalies</div>
+                        </div>
+                        <div>
+                            <div style="font-size: 1.5rem; font-weight: 700; color: #c62828;">${affectedCardsCount}</div>
+                            <div style="color: #c62828; font-size: 0.9rem;">Affected Cards</div>
+                        </div>
+                        <div>
+                            <div style="font-size: 1.5rem; font-weight: 700; color: #c62828;">${(anomalyStats.avg_severity * 100).toFixed(1)}%</div>
+                            <div style="color: #c62828; font-size: 0.9rem;">Avg Severity</div>
+                        </div>
+                        <div>
+                            <div style="font-size: 1.5rem; font-weight: 700; color: #c62828;">${(anomalyStats.max_severity * 100).toFixed(1)}%</div>
+                            <div style="color: #c62828; font-size: 0.9rem;">Max Severity</div>
+                        </div>
+                    </div>
+                    <div style="color: #c62828; font-size: 0.9rem;">
+                        <strong>Top Anomaly Types:</strong> ${topAnomalyTypes || 'None'}
+                    </div>
+                </div>
+            `;
+        }
+
+        const anomaliesHTML = anomalies.slice(0, 15).map(anomaly => {
+            const severity = anomaly.severity || 0;
+            const severityLevel = getSeverityLevel(severity);
+            const severityClass = getSeverityClass(severity);
+
+            return `
+                <div onclick="window.location.href='/anomaly/${anomaly.alert_id}'" style="
+                    padding: 1rem;
+                    border-left: 4px solid ${getSeverityColor(severity)};
+                    background: ${getSeverityBgColor(severity)};
+                    margin-bottom: 0.5rem;
+                    border-radius: 0 8px 8px 0;
+                    cursor: pointer;
+                    transition: transform 0.2s ease;
+                " onmouseover="this.style.transform='translateX(5px)'" onmouseout="this.style.transform='translateX(0)'">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.5rem;">
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <span class="badge ${severityClass}">
+                                ${getAnomalyIcon(anomaly.anomaly_type)} ${severityLevel}
+                            </span>
+                            <span style="font-size: 0.8rem; color: #666;">
+                                Card: ${anomaly.card_id}
+                            </span>
+                        </div>
+                        <div style="font-size: 0.8rem; color: #666;">
+                            ${formatDate(anomaly.timestamp)}
+                        </div>
+                    </div>
+                    <div style="font-weight: 600; color: #2c3e50; margin-bottom: 0.5rem;">
+                        ${formatAnomalyType(anomaly.anomaly_type)}
+                    </div>
+                    <div style="font-size: 0.9rem; color: #666; line-height: 1.4;">
+                        ${anomaly.description.substring(0, 200)}${anomaly.description.length > 200 ? '...' : ''}
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        anomaliesEl.innerHTML = statsHTML + anomaliesHTML;
+
+        if (anomalies.length > 15) {
+            anomaliesEl.innerHTML += `
+                <div style="text-align: center; padding: 1rem;">
+                    <a href="/anomalies?search=${userId}" class="btn btn-secondary">
+                        View All ${anomalies.length} Anomalies for this User
+                    </a>
+                </div>
+            `;
+        }
+    }
+
+    // Utility functions for anomalies
+    function getSeverityLevel(severity) {
+        if (severity >= 0.9) return 'CRITICAL';
+        if (severity >= 0.7) return 'HIGH';
+        if (severity >= 0.5) return 'MEDIUM';
+        return 'LOW';
+    }
+
+    function getSeverityClass(severity) {
+        if (severity >= 0.9) return 'badge-danger';
+        if (severity >= 0.7) return 'badge-warning';
+        if (severity >= 0.5) return 'badge-info';
+        return 'badge-secondary';
+    }
+
+    function getSeverityColor(severity) {
+        if (severity >= 0.9) return '#e74c3c';
+        if (severity >= 0.7) return '#f39c12';
+        if (severity >= 0.5) return '#3498db';
+        return '#95a5a6';
+    }
+
+    function getSeverityBgColor(severity) {
+        if (severity >= 0.9) return '#ffebee';
+        if (severity >= 0.7) return '#fff8e1';
+        if (severity >= 0.5) return '#e3f2fd';
+        return '#f5f5f5';
+    }
+
+    function getAnomalyIcon(type) {
+        const icons = {
+            'AMOUNT_ANOMALY': '💰',
+            'INACTIVE_CARD': '🚫',
+            'EXPIRED_CARD': '⏰',
+            'INSUFFICIENT_FUNDS': '💸',
+            'TRANSACTION_LIMIT_EXCEEDED': '🚨',
+            'UNUSUAL_MERCHANT': '🏪',
+            'MICRO_TRANSACTIONS_PATTERN': '🔬',
+            'RAPID_GEO_CHANGE_PATTERN': '🌍',
+            'DUPLICATE_TRANSACTIONS_PATTERN': '🔄',
+            'ROUND_AMOUNTS_PATTERN': '🎯',
+            'ATM_PATTERN_PATTERN': '🏧'
+        };
+        return icons[type] || '⚠️';
+    }
+
+    function formatAnomalyType(type) {
+        if (!type) return 'Unknown';
+        return type.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, l => l.toUpperCase());
+    }
+
+    function updateCharts(stats) {
+        if (!stats) return;
+
+        // Countries Chart
+        const countriesData = stats.countries_visited || {};
+        countriesChart.data.labels = Object.keys(countriesData);
+        countriesChart.data.datasets[0].data = Object.values(countriesData);
+        countriesChart.update();
+
+        // Merchant Categories Chart
+        const merchantData = stats.merchant_stats || {};
+        merchantChart.data.labels = Object.keys(merchantData);
+        merchantChart.data.datasets[0].data = Object.values(merchantData);
+        merchantChart.update();
+    }
+
+    function viewCard(cardId) {
+        window.location.href = `/card/${cardId}`;
+    }
+
+    function viewTransaction(transactionId) {
+        window.location.href = `/transaction/${transactionId}`;
+    }
+</script>
+{% endblock %}

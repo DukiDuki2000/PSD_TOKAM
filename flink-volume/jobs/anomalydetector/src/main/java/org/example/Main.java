@@ -4,99 +4,164 @@ import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.flink.connector.kafka.sink.KafkaSink;
-import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
-import org.apache.flink.api.common.serialization.SimpleStringSchema;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.windowing.assigners.SlidingProcessingTimeWindows;
-import org.apache.flink.streaming.api.windowing.time.Time;
+import org.apache.flink.streaming.api.CheckpointingMode;
+import org.apache.flink.streaming.api.windowing.assigners.SlidingEventTimeWindows;
 import org.apache.flink.util.OutputTag;
 import org.example.models.AnomalyAlert;
 import org.example.models.Transaction;
-import org.example.processors.AmountAnomalyDetectionProcess;
-//import org.example.processors.FrequencyAnomalyWindowFunction;
-//import org.example.processors.HighFrequencyAnomalyDetector;
+import org.example.processors.*;
+import org.example.processors.window.*;
 import org.example.serializers.AnomalyAlertSerializer;
-import org.example.serializers.TransactionParser;
+import org.example.serializers.TransactionDeserializer;
+import org.example.watermarks.TransactionTimestampAssigner;
 import org.example.config.KafkaConfig;
 
 import java.time.Duration;
 
 public class Main {
 
-
     public static void main(String[] args) throws Exception {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-        env.enableCheckpointing(100);
 
-        KafkaSource<String> kafkaSource = KafkaSource.<String>builder()
+        env.enableCheckpointing(30000);
+        env.getCheckpointConfig().setCheckpointingMode(CheckpointingMode.EXACTLY_ONCE);
+        env.getCheckpointConfig().setMinPauseBetweenCheckpoints(15000);
+        env.getCheckpointConfig().setCheckpointTimeout(90000);
+        env.getCheckpointConfig().setMaxConcurrentCheckpoints(1);
+
+        env.setParallelism(1);
+
+
+        KafkaSource<Transaction> kafkaSource = KafkaSource.<Transaction>builder()
                 .setBootstrapServers(KafkaConfig.KAFKA_BOOTSTRAP_SERVERS)
                 .setTopics(KafkaConfig.KAFKA_TOPIC_TRANSACTIONS)
-                .setGroupId("anomaly-detection-group")
+                .setGroupId(KafkaConfig.KAFKA_GROUP_ID)
                 .setStartingOffsets(OffsetsInitializer.latest())
-                .setValueOnlyDeserializer(new SimpleStringSchema())
+                .setDeserializer(new TransactionDeserializer())
                 .build();
 
+
+        WatermarkStrategy<Transaction> watermarkStrategy = WatermarkStrategy
+                .<Transaction>forBoundedOutOfOrderness(Duration.ofSeconds(1))
+                .withTimestampAssigner(new TransactionTimestampAssigner())
+                .withIdleness(Duration.ofMinutes(1));
+
+
         DataStream<Transaction> transactions = env
-                .fromSource(kafkaSource, WatermarkStrategy.<String>forBoundedOutOfOrderness(Duration.ofSeconds(5))
-                        .withTimestampAssigner((event, timestamp) -> System.currentTimeMillis()), "kafka-source")
-                .map(new TransactionParser())
-                .name("Parse Transactions");
+                .fromSource(kafkaSource, watermarkStrategy, "kafka-transaction-source")
+                .name("Transaction Stream from Kafka");
 
 
         OutputTag<AnomalyAlert> amountAnomalyTag = new OutputTag<AnomalyAlert>("amount-anomaly") {};
-//        OutputTag<AnomalyAlert> frequencyAnomalyTag = new OutputTag<AnomalyAlert>("frequency-anomaly") {};
-//        OutputTag<AnomalyAlert> highFrequencyAnomalyTag = new OutputTag<AnomalyAlert>("high-frequency-anomaly") {};
+        OutputTag<AnomalyAlert> inactiveCardAnomalyTag = new OutputTag<AnomalyAlert>("inactive-card-anomaly") {};
+        OutputTag<AnomalyAlert> limitAnomalyTag = new OutputTag<AnomalyAlert>("limit-anomaly") {};
+        OutputTag<AnomalyAlert> microTransactionAnomalyTag = new OutputTag<AnomalyAlert>("micro-transaction-anomaly") {};
+        OutputTag<AnomalyAlert> rapidGeoAnomalyTag = new OutputTag<AnomalyAlert>("rapid-geo-anomaly") {};
+        OutputTag<AnomalyAlert> duplicateAnomalyTag = new OutputTag<AnomalyAlert>("duplicate-anomaly") {};
+        OutputTag<AnomalyAlert> roundAmountAnomalyTag = new OutputTag<AnomalyAlert>("round-amount-anomaly") {};
+        OutputTag<AnomalyAlert> atmPatternAnomalyTag = new OutputTag<AnomalyAlert>("atm-pattern-anomaly") {};
+        OutputTag<AnomalyAlert> unusualMerchantAnomalyTag = new OutputTag<AnomalyAlert>("unusual-merchant-anomaly") {};
 
-        // Amount anomaly detection
-        SingleOutputStreamOperator<Transaction> amountProcessed = transactions
-                .process(new AmountAnomalyDetectionProcess(amountAnomalyTag))
+
+
+        // 1. Amount anomaly detection (independent, stateless - INSTANT)
+        SingleOutputStreamOperator<Transaction> amountDetector = transactions
+                .process(new AmountAnomalyDetector(amountAnomalyTag))
                 .name("Amount Anomaly Detection");
 
-//        // High frequency detection (3+ transactions per minute)
-//        SingleOutputStreamOperator<Transaction> highFrequencyProcessed = transactions
-//                .keyBy(transaction -> transaction.cardId)
-//                .process(new HighFrequencyAnomalyDetector(highFrequencyAnomalyTag))
-//                .name("High Frequency Detection (3+ per minute)");
-//
-//        // Regular frequency anomaly detection using sliding windows
-//        DataStream<AnomalyAlert> frequencyAnomalies = transactions
-//                .keyBy(transaction -> transaction.cardId)
-//                .window(SlidingProcessingTimeWindows.of(Time.minutes(5), Time.minutes(1)))
-//                .process(new FrequencyAnomalyWindowFunction(frequencyAnomalyTag))
-//                .name("Frequency Anomaly Detection (5min window)");
+        // 2. Inactive/Expired card detection (independent, stateless - INSTANT)
+        SingleOutputStreamOperator<Transaction> cardStatusDetector = transactions
+                .process(new InactiveCardAnomalyDetector(inactiveCardAnomalyTag))
+                .name("Card Status Anomaly Detection");
 
-        // Collect all anomaly alerts from side outputs
-        DataStream<AnomalyAlert> amountAnomalies = amountProcessed.getSideOutput(amountAnomalyTag);
-//        DataStream<AnomalyAlert> highFrequencyAnomalies = highFrequencyProcessed.getSideOutput(highFrequencyAnomalyTag);
+        // 3. Limit anomaly detection (independent, stateless - INSTANT)
+        SingleOutputStreamOperator<Transaction> limitDetector = transactions
+                .process(new LimitAnomalyDetector(limitAnomalyTag))
+                .name("Limit Anomaly Detection");
 
-        // Union all anomaly streams
-//        DataStream<AnomalyAlert> allAnomalies = amountAnomalies
-//                .union(frequencyAnomalies)
-//                .union(highFrequencyAnomalies);
+        // 4. Unusual merchant detection (independent, stateless - INSTANT)
+        SingleOutputStreamOperator<Transaction> merchantDetector = transactions
+                .process(new UnusualMerchantDetector(unusualMerchantAnomalyTag))
+                .name("Unusual Merchant Detection");
 
-        // Print alerts to console for monitoring
-        amountAnomalies.print("🚨 ANOMALY DETECTED");
+        // 5. Micro transaction detection (OPTIMIZED WINDOW)
+        SingleOutputStreamOperator<Transaction> microDetector = transactions
+                .keyBy(transaction -> transaction.cardId)
+                .window(SlidingEventTimeWindows.of(Duration.ofSeconds(40), Duration.ofSeconds(20)))
+                .process(new MicroTransactionWindowDetector(microTransactionAnomalyTag))
+                .name("Micro Transaction Window Detection");
 
-        // Kafka sink for alerts
+        // 6. Rapid geo change detection (OPTIMIZED WINDOW)
+        SingleOutputStreamOperator<Transaction> geoDetector = transactions
+                .keyBy(transaction -> transaction.cardId)
+                .window(SlidingEventTimeWindows.of(Duration.ofSeconds(20),Duration.ofSeconds(10)))
+                .process(new RapidGeoChangeWindowDetector(rapidGeoAnomalyTag))
+                .name("Rapid Geo Change Window Detection");
+
+
+        // 7. Duplicate transaction detection (OPTIMIZED WINDOW)
+        SingleOutputStreamOperator<Transaction> duplicateDetector=transactions
+                .keyBy(transaction->transaction.cardId)
+                .window(SlidingEventTimeWindows.of(Duration.ofSeconds(20),Duration.ofSeconds(10)))
+                .process(new DuplicateTransactionWindowDetector(duplicateAnomalyTag))
+                .name("Duplicate Transaction Window Detection");
+
+        // 8. Round amount detection (OPTIMIZED WINDOW)
+        SingleOutputStreamOperator<Transaction> roundDetector = transactions
+                .keyBy(transaction -> transaction.cardId)
+                .window(SlidingEventTimeWindows.of(Duration.ofSeconds(40), Duration.ofSeconds(20)))
+                .process(new RoundAmountWindowDetector(roundAmountAnomalyTag))
+                .name("Round Amount Window Detection");
+
+        // 9. ATM pattern detection (OPTIMIZED WINDOW)
+        SingleOutputStreamOperator<Transaction> atmDetector = transactions
+                .keyBy(transaction -> transaction.cardId)
+                .window(SlidingEventTimeWindows.of(Duration.ofSeconds(40), Duration.ofSeconds(20)))
+                .process(new ATMPatternWindowDetector(atmPatternAnomalyTag))
+                .name("ATM Pattern Window Detection");
+
+
+
+
+
+        DataStream<AnomalyAlert> amountAnomalies = amountDetector.getSideOutput(amountAnomalyTag);
+        DataStream<AnomalyAlert> inactiveCardAnomalies = cardStatusDetector.getSideOutput(inactiveCardAnomalyTag);
+        DataStream<AnomalyAlert> limitAnomalies = limitDetector.getSideOutput(limitAnomalyTag);
+        DataStream<AnomalyAlert> unusualMerchantAnomalies = merchantDetector.getSideOutput(unusualMerchantAnomalyTag);
+        DataStream<AnomalyAlert> microTransactionAnomalies = microDetector.getSideOutput(microTransactionAnomalyTag);
+        DataStream<AnomalyAlert> rapidGeoAnomalies = geoDetector.getSideOutput(rapidGeoAnomalyTag);
+        DataStream<AnomalyAlert> duplicateAnomalies = duplicateDetector.getSideOutput(duplicateAnomalyTag);
+        DataStream<AnomalyAlert> roundAmountAnomalies = roundDetector.getSideOutput(roundAmountAnomalyTag);
+        DataStream<AnomalyAlert> atmPatternAnomalies = atmDetector.getSideOutput(atmPatternAnomalyTag);
+
+
+        DataStream<AnomalyAlert> allAnomalies = amountAnomalies
+                .union(inactiveCardAnomalies)
+                .union(limitAnomalies)
+                .union(unusualMerchantAnomalies)
+                .union(microTransactionAnomalies)
+                .union(rapidGeoAnomalies)
+                .union(duplicateAnomalies)
+                .union(roundAmountAnomalies)
+                .union(atmPatternAnomalies);
+
+
+        allAnomalies.print();
+
+
         KafkaSink<AnomalyAlert> alertSink = KafkaSink.<AnomalyAlert>builder()
                 .setBootstrapServers(KafkaConfig.KAFKA_BOOTSTRAP_SERVERS)
-                .setRecordSerializer(KafkaRecordSerializationSchema.builder()
-                        .setTopic(KafkaConfig.KAFKA_TOPIC_ANOMALY)
-                        .setValueSerializationSchema(new AnomalyAlertSerializer())
-                        .build())
+                .setRecordSerializer(new AnomalyAlertSerializer(KafkaConfig.KAFKA_TOPIC_ANOMALY))
                 .build();
 
-        // Send all alerts to Kafka
-        amountAnomalies.sinkTo(alertSink).name("Alert Kafka Sink");
 
-        System.out.println("🚀 Starting Anomaly Detection Pipeline...");
-        System.out.println("📊 Monitoring:");
-        System.out.println("   • Amount anomalies (z-score & extreme amounts)");
-        System.out.println("   • High frequency (3+ transactions per minute)");
-        System.out.println("   • General frequency anomalies (5-minute windows)");
+        allAnomalies.sinkTo(alertSink).name("Alert Kafka Sink");
 
-        env.execute("Complete Anomaly Detection Pipeline");
+
+
+        env.execute("PSD Projekt");
     }
 }

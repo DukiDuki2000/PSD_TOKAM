@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transaction Data Monitor</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/leaflet.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 1.5rem 2rem;
+            box-shadow: 0 4px 30px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+        }
+
+        .header h1 {
+            color: #2c3e50;
+            font-size: 2.2rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            padding: 1.5rem;
+            border-radius: 16px;
+            text-align: center;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+            transition: transform 0.3s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .stat-card h3 {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+            font-weight: 700;
+        }
+
+        .stat-card p {
+            opacity: 0.9;
+            font-size: 1rem;
+            font-weight: 500;
+        }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 2rem;
+            padding: 0 2rem;
+            max-width: 1900px;
+            margin: 0 auto;
+        }
+
+        .left-column {
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+        }
+
+        .right-column {
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+        }
+
+        .panel {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(15px);
+            border-radius: 20px;
+            padding: 2rem;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+
+        .panel h2 {
+            color: #2c3e50;
+            margin-bottom: 1.5rem;
+            font-size: 1.6rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        #map {
+            height: 500px;
+            border-radius: 15px;
+            overflow: hidden;
+            border: 3px solid #f8f9fa;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 350px;
+        }
+
+        .transaction-list {
+            max-height: 450px;
+            overflow-y: auto;
+            border-radius: 10px;
+        }
+
+        .transaction-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem;
+            border-bottom: 1px solid #eee;
+            transition: all 0.2s ease;
+        }
+
+        .transaction-item:hover {
+            background: linear-gradient(90deg, #f8f9fa, #e9ecef);
+            transform: translateX(5px);
+        }
+
+        .transaction-item:last-child {
+            border-bottom: none;
+        }
+
+        .transaction-amount {
+            font-weight: 700;
+            color: #27ae60;
+            font-size: 1.1rem;
+        }
+
+        .transaction-declined {
+            color: #e74c3c;
+        }
+
+        .transaction-info {
+            display: flex;
+            flex-direction: column;
+            gap: 0.3rem;
+        }
+
+        .transaction-id {
+            font-family: monospace;
+            background: #f8f9fa;
+            padding: 0.2rem 0.5rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+        }
+
+        .transaction-location {
+            font-size: 0.9rem;
+            color: #666;
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+        }
+
+        .transaction-category {
+            font-size: 0.8rem;
+            background: #e3f2fd;
+            color: #1976d2;
+            padding: 0.2rem 0.6rem;
+            border-radius: 10px;
+            display: inline-block;
+        }
+
+        .connection-status {
+            position: fixed;
+            top: 2rem;
+            right: 2rem;
+            padding: 0.8rem 1.5rem;
+            border-radius: 25px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            z-index: 1000;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        }
+
+        .status-connected {
+            background: #27ae60;
+            color: white;
+        }
+
+        .status-disconnected {
+            background: #e74c3c;
+            color: white;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 3rem;
+            color: #666;
+            font-size: 1.1rem;
+        }
+
+        .cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .card-profile {
+            background: linear-gradient(135deg, #f8f9fa, #e9ecef);
+            padding: 1rem;
+            border-radius: 12px;
+            border-left: 4px solid #667eea;
+        }
+
+        .card-profile h4 {
+            color: #2c3e50;
+            margin-bottom: 0.5rem;
+            font-size: 0.9rem;
+        }
+
+        .card-profile .card-details {
+            font-size: 0.8rem;
+            color: #666;
+            line-height: 1.4;
+        }
+
+        .active-card {
+            border-left-color: #27ae60;
+        }
+
+        .inactive-card {
+            border-left-color: #e74c3c;
+            opacity: 0.7;
+        }
+
+        @media (max-width: 1400px) {
+            .dashboard {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+
+        .marker-legend {
+            background: rgba(255,255,255,0.9);
+            padding: 1rem;
+            border-radius: 10px;
+            margin-top: 1rem;
+            font-size: 0.9rem;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin: 0.3rem 0;
+        }
+
+        .legend-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+    </style>
+</head>
+<body>
+    <div class="connection-status status-disconnected pulse" id="connectionStatus">
+        Connecting...
+    </div>
+
+    <header class="header">
+        <h1>📊 Transaction Data Monitor</h1>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3 id="totalTransactions">0</h3>
+                <p>Live Transactions</p>
+            </div>
+            <div class="stat-card">
+                <h3 id="totalCards">0</h3>
+                <p>Total Cards</p>
+            </div>
+            <div class="stat-card">
+                <h3 id="activeCards">0</h3>
+                <p>Active Cards</p>
+            </div>
+            <div class="stat-card">
+                <h3 id="avgBalance">0</h3>
+                <p>Avg Balance (PLN)</p>
+            </div>
+            <div class="stat-card">
+                <h3 id="declinedRate">0%</h3>
+                <p>Decline Rate</p>
+            </div>
+        </div>
+    </header>
+
+    <div class="dashboard">
+        <div class="left-column">
+            <div class="panel">
+                <h2>🗺️ Transaction Locations</h2>
+                <div id="map"></div>
+                <div class="marker-legend">
+                    <div class="legend-item">
+                        <div class="legend-color" style="background-color: #2196F3;"></div>
+                        <span>Approved (Poland)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background-color: #4CAF50;"></div>
+                        <span>Approved (Foreign)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background-color: #FF5722;"></div>
+                        <span>Declined</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background-color: #FF9800;"></div>
+                        <span>High Amount (>1000 PLN)</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h2>📋 Live Transaction Stream</h2>
+                <div class="transaction-list" id="transactionList">
+                    <div class="loading">Waiting for transactions...</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="right-column">
+            <div class="panel">
+                <h2>🏪 Merchant Categories</h2>
+                <div class="chart-container">
+                    <canvas id="merchantChart"></canvas>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h2>🌍 Transaction Countries</h2>
+                <div class="chart-container">
+                    <canvas id="countryChart"></canvas>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h2>💰 Amount Distribution</h2>
+                <div class="chart-container">
+                    <canvas id="amountChart"></canvas>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h2>⏰ Hourly Volume</h2>
+                <div class="chart-container">
+                    <canvas id="volumeChart"></canvas>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h2>💳 Card Profiles (Redis)</h2>
+                <div class="cards-grid" id="cardProfiles">
+                    <div class="loading">Loading card profiles...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Globalne zmienne
+        let map;
+        let locationMarkers = [];
+        let charts = {};
+        let isConnected = false;
+
+        // Inicjalizacja
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeMap();
+            initializeCharts();
+            startDataUpdates();
+        });
+
+        function initializeMap() {
+            map = L.map('map').setView([52.0693, 19.4803], 6);
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(map);
+        }
+
+        function initializeCharts() {
+            // Merchant Categories
+            const merchantCtx = document.getElementById('merchantChart').getContext('2d');
+            charts.merchant = new Chart(merchantCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        data: [],
+                        backgroundColor: [
+                            '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0',
+                            '#9966FF', '#FF9F40', '#FF6384', '#C9CBCF',
+                            '#36A2EB', '#FFCE56'
+                        ]
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'bottom' }
+                    }
+                }
+            });
+
+            // Countries
+            const countryCtx = document.getElementById('countryChart').getContext('2d');
+            charts.country = new Chart(countryCtx, {
+                type: 'bar',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Transactions',
+                        data: [],
+                        backgroundColor: 'rgba(54, 162, 235, 0.8)',
+                        borderColor: 'rgba(54, 162, 235, 1)',
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: { y: { beginAtZero: true } }
+                }
+            });
+
+            // Amount Distribution
+            const amountCtx = document.getElementById('amountChart').getContext('2d');
+            charts.amount = new Chart(amountCtx, {
+                type: 'pie',
+                data: {
+                    labels: ['0-50 PLN', '50-200 PLN', '200-500 PLN', '500-1000 PLN', '1000+ PLN'],
+                    datasets: [{
+                        data: [0, 0, 0, 0, 0],
+                        backgroundColor: [
+                            '#4CAF50', '#2196F3', '#FF9800', '#E91E63', '#9C27B0'
+                        ]
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { position: 'bottom' } }
+                }
+            });
+
+            // Hourly Volume
+            const volumeCtx = document.getElementById('volumeChart').getContext('2d');
+            charts.volume = new Chart(volumeCtx, {
+                type: 'line',
+                data: {
+                    labels: Array.from({length: 24}, (_, i) => `${i}:00`),
+                    datasets: [{
+                        label: 'Volume (PLN)',
+                        data: new Array(24).fill(0),
+                        borderColor: 'rgba(76, 175, 80, 1)',
+                        backgroundColor: 'rgba(76, 175, 80, 0.2)',
+                        tension: 0.4,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: { y: { beginAtZero: true } }
+                }
+            });
+        }
+
+        function startDataUpdates() {
+            setInterval(updateDashboard, 2000);
+            updateDashboard();
+        }
+
+        async function updateDashboard() {
+            try {
+                const [statsResponse, locationsResponse, transactionsResponse, redisResponse, profilesResponse] = await Promise.all([
+                    fetch('/api/stats'),
+                    fetch('/api/locations'),
+                    fetch('/api/transactions'),
+                    fetch('/api/redis-data'),
+                    fetch('/api/card-profiles')
+                ]);
+
+                const stats = await statsResponse.json();
+                const locations = await locationsResponse.json();
+                const transactions = await transactionsResponse.json();
+                const redisData = await redisResponse.json();
+                const profiles = await profilesResponse.json();
+
+                updateConnectionStatus(true);
+                updateStats(stats, redisData);
+                updateLocations(locations);
+                updateTransactions(transactions.transactions);
+                updateCharts(stats);
+                updateCardProfiles(profiles);
+
+            } catch (error) {
+                console.error('Error updating dashboard:', error);
+                updateConnectionStatus(false);
+            }
+        }
+
+        function updateConnectionStatus(connected) {
+            const statusEl = document.getElementById('connectionStatus');
+            if (connected !== isConnected) {
+                isConnected = connected;
+                statusEl.textContent = connected ? '🟢 Connected' : '🔴 Disconnected';
+                statusEl.className = `connection-status ${connected ? 'status-connected' : 'status-disconnected pulse'}`;
+            }
+        }
+
+        function updateStats(stats, redisData) {
+            document.getElementById('totalTransactions').textContent = stats.total_transactions;
+            document.getElementById('totalCards').textContent = redisData.cards_count;
+            document.getElementById('activeCards').textContent = redisData.active_cards;
+            document.getElementById('avgBalance').textContent = redisData.avg_balance.toLocaleString();
+
+            const approvedCount = stats.status_stats.approved || 0;
+            const declinedCount = stats.status_stats.declined || 0;
+            const total = approvedCount + declinedCount;
+            const declineRate = total > 0 ? ((declinedCount / total) * 100).toFixed(1) : 0;
+            document.getElementById('declinedRate').textContent = `${declineRate}%`;
+        }
+
+        function updateLocations(locations) {
+            locationMarkers.forEach(marker => map.removeLayer(marker));
+            locationMarkers = [];
+
+            locations.forEach(location => {
+                if (location.lat && location.lng) {
+                    let color = '#2196F3'; // Default blue for Poland approved
+                    
+                    if (location.status === 'declined') {
+                        color = '#FF5722'; // Red for declined
+                    } else if (location.amount > 1000) {
+                        color = '#FF9800'; // Orange for high amount
+                    } else if (location.country_code !== 'PL') {
+                        color = '#4CAF50'; // Green for foreign approved
+                    }
+                    
+                    const marker = L.circleMarker([location.lat, location.lng], {
+                        radius: Math.min(Math.sqrt(location.amount / 20), 12) + 3,
+                        fillColor: color,
+                        color: color,
+                        weight: 2,
+                        opacity: 0.8,
+                        fillOpacity: 0.6
+                    }).addTo(map);
+
+                    marker.bindPopup(`
+                        <strong>${location.city}, ${location.country}</strong><br>
+                        Amount: <strong>${location.amount} PLN</strong><br>
+                        Status: <strong>${location.status}</strong><br>
+                        Category: <strong>${location.merchant_category}</strong>
+                    `);
+
+                    locationMarkers.push(marker);
+                }
+            });
+        }
+
+        function updateTransactions(transactions) {
+            const listEl = document.getElementById('transactionList');
+            
+            if (transactions.length === 0) {
+                listEl.innerHTML = '<div class="loading">No transactions yet...</div>';
+                return;
+            }
+
+            listEl.innerHTML = transactions.slice(-15).reverse().map(tx => {
+                const isDeclined = tx.status === 'declined';
+                const location = tx.location || {};
+                
+                return `
+                    <div class="transaction-item">
+                        <div class="transaction-info">
+                            <div class="transaction-id">${tx.transaction_id}</div>
+                            <div class="transaction-location">
+                                📍 ${location.city || 'Unknown'}, ${location.country || 'Unknown'}
+                            </div>
+                            <div class="transaction-category">${tx.merchant_category || 'general'}</div>
+                        </div>
+                        <div class="transaction-amount ${isDeclined ? 'transaction-declined' : ''}">
+                            ${isDeclined ? '❌' : '✅'} ${tx.amount} PLN
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function updateCharts(stats) {
+            // Merchant chart
+            const merchantData = stats.merchant_stats;
+            charts.merchant.data.labels = Object.keys(merchantData);
+            charts.merchant.data.datasets[0].data = Object.values(merchantData);
+            charts.merchant.update();
+
+            // Country chart
+            const countryData = stats.country_stats;
+            charts.country.data.labels = Object.keys(countryData);
+            charts.country.data.datasets[0].data = Object.values(countryData);
+            charts.country.update();
+
+            // Amount distribution chart
+            const amountData = stats.amount_ranges;
+            charts.amount.data.datasets[0].data = [
+                amountData['0-50'],
+                amountData['50-200'],
+                amountData['200-500'],
+                amountData['500-1000'],
+                amountData['1000+']
+            ];
+            charts.amount.update();
+
+            // Hourly volume chart
+            const hourlyData = stats.hourly_volume;
+            const volumeArray = new Array(24).fill(0);
+            Object.keys(hourlyData).forEach(hour => {
+                volumeArray[parseInt(hour)] = hourlyData[hour];
+            });
+            charts.volume.data.datasets[0].data = volumeArray;
+            charts.volume.update();
+        }
+
+        function updateCardProfiles(profiles) {
+            const gridEl = document.getElementById('cardProfiles');
+            
+            if (profiles.length === 0) {
+                gridEl.innerHTML = '<div class="loading">No card profiles found...</div>';
+                return;
+            }
+
+            gridEl.innerHTML = profiles.slice(0, 20).map(profile => {
+                const isActive = profile.is_active;
+                const expiryDate = new Date(profile.expiry_date);
+                const isExpired = expiryDate < new Date();
+                
+                return `
+                    <div class="card-profile ${isActive ? 'active-card' : 'inactive-card'}">
+                        <h4>${profile.card_id}</h4>
+                        <div class="card-details">
+                            <div><strong>User:</strong> ${profile.user_id}</div>
+                            <div><strong>Balance:</strong> ${profile.current_balance.toLocaleString()} PLN</div>
+                            <div><strong>Daily Limit:</strong> ${profile.daily_limit.toLocaleString()} PLN</div>
+                            <div><strong>Avg Amount:</strong> ${profile.avg_amount} PLN</div>
+                            <div><strong>Status:</strong> 
+                                <span style="color: ${isActive ? '#27ae60' : '#e74c3c'}">
+                                    ${isActive ? '✅ Active' : '❌ Inactive'}
+                                </span>
+                            </div>
+                            <div><strong>Expires:</strong> 
+                                <span style="color: ${isExpired ? '#e74c3c' : '#666'}">
+                                    ${expiryDate.toLocaleDateString()}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+    </script>
+</body>
+</html>

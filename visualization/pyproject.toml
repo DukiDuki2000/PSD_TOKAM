@@ -1,0 +1,12 @@
+[tool.poetry]
+name = "python-psd"
+version = "0.1.0"
+description = ""
+authors = ["Ziomyh"]
+packages = [{include = "main"}]
+
+[tool.poetry.dependencies]
+python = ">=3.12,<3.13"
+flask="3.1.1"
+kafka-python="2.2.10"
+redis="6.2.0"

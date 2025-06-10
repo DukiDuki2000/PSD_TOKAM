@@ -50,12 +50,5 @@ public class CardProfile {
         this.expiryDate = expiryDate;
     }
 
-    @Override
-    public String toString() {
-        return String.format("CardProfile{cardId='%s', userId='%s', avgAmount=%.2f, stdAmount=%.2f, " +
-                        "dailyLimit=%.2f, monthlyLimit=%.2f, transactionLimit=%.2f, " +
-                        "isActive=%s, currentBalance=%.2f, expiryDate='%s'}",
-                cardId, userId, avgAmount, stdAmount, dailyLimit, monthlyLimit,
-                transactionLimit, isActive, currentBalance, expiryDate);
-    }
+
 }

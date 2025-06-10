@@ -1,0 +1,315 @@
+{% extends "base.html" %}
+
+{% block title %}Cards - Transaction Monitor{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">💳 Card Management</h1>
+    <p class="page-subtitle">Overview of all cards from Redis database</p>
+</div>
+
+<!-- Summary Stats -->
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem;">
+    <div style="background: linear-gradient(135deg, #27ae60, #2ecc71); color: white; padding: 1.5rem; border-radius: 16px; text-align: center;">
+        <div style="font-size: 2rem; font-weight: 700;" id="activeCards">-</div>
+        <div style="opacity: 0.9;">Active Cards</div>
+    </div>
+    <div style="background: linear-gradient(135deg, #e74c3c, #c0392b); color: white; padding: 1.5rem; border-radius: 16px; text-align: center;">
+        <div style="font-size: 2rem; font-weight: 700;" id="inactiveCards">-</div>
+        <div style="opacity: 0.9;">Inactive Cards</div>
+    </div>
+    <div style="background: linear-gradient(135deg, #3498db, #2980b9); color: white; padding: 1.5rem; border-radius: 16px; text-align: center;">
+        <div style="font-size: 2rem; font-weight: 700;" id="totalBalance">-</div>
+        <div style="opacity: 0.9;">Total Balance</div>
+    </div>
+    <div style="background: linear-gradient(135deg, #9b59b6, #8e44ad); color: white; padding: 1.5rem; border-radius: 16px; text-align: center;">
+        <div style="font-size: 2rem; font-weight: 700;" id="avgBalance">-</div>
+        <div style="opacity: 0.9;">Avg Balance</div>
+    </div>
+</div>
+
+<div class="panel">
+    <div class="panel-header">
+        <h2 class="panel-title">Card List</h2>
+        <div style="display: flex; gap: 1rem; align-items: center;">
+            <select id="statusFilter" style="padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px;">
+                <option value="">All Status</option>
+                <option value="active">Active Only</option>
+                <option value="inactive">Inactive Only</option>
+            </select>
+            <input type="text" id="searchInput" placeholder="Search cards..."
+                   style="padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; width: 200px;">
+            <button class="btn btn-primary" onclick="performSearch()">🔍 Search</button>
+            <button class="btn btn-secondary" onclick="clearFilters()">🔄 Clear</button>
+        </div>
+    </div>
+
+    <div id="searchInfo" style="margin-bottom: 1rem; display: none;">
+        <div style="background: #e3f2fd; padding: 1rem; border-radius: 8px; color: #1976d2;">
+            <span id="searchResultText"></span>
+            <button onclick="clearFilters()" style="margin-left: 1rem; background: none; border: none; color: #1976d2; cursor: pointer; text-decoration: underline;">Clear search</button>
+        </div>
+    </div>
+
+    <div id="cardsTable">
+        <div class="loading">Loading cards...</div>
+    </div>
+
+    <div id="cardsPagination"></div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let currentPage = 1;
+    let totalCards = 0;
+    let totalPages = 0;
+    let currentFilters = {
+        search: '',
+        status: ''
+    };
+    let isFiltered = false;
+
+    document.addEventListener('DOMContentLoaded', function() {
+        loadCards();
+
+        // Enter key dla wyszukiwania
+        document.getElementById('searchInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                performSearch();
+            }
+        });
+
+        // Change event dla filtru statusu
+        document.getElementById('statusFilter').addEventListener('change', function() {
+            performSearch();
+        });
+    });
+
+    async function loadCards(page = 1) {
+        try {
+            showLoading('cardsTable');
+
+            // Buduj URL z parametrami
+            const params = new URLSearchParams({
+                page: page,
+                per_page: 50
+            });
+
+            if (currentFilters.search) {
+                params.append('search', currentFilters.search);
+            }
+            if (currentFilters.status) {
+                params.append('status', currentFilters.status);
+            }
+
+            const response = await fetch(`/api/cards?${params}`);
+            if (!response.ok) throw new Error('API Error');
+
+            const data = await response.json();
+
+            totalCards = data.total;
+            totalPages = data.total_pages;
+            currentPage = data.page;
+            isFiltered = data.filtered || false;
+
+            updateConnectionStatus(true);
+            updateSummaryStats();
+            displayCards(data.cards);
+            updatePagination();
+            updateSearchInfo();
+
+        } catch (error) {
+            console.error('Error loading cards:', error);
+            updateConnectionStatus(false);
+            showError('cardsTable', 'Failed to load cards');
+        }
+    }
+
+    function performSearch() {
+        // Pobierz wartości filtrów
+        currentFilters.search = document.getElementById('searchInput').value.trim();
+        currentFilters.status = document.getElementById('statusFilter').value;
+
+        // Resetuj do pierwszej strony
+        currentPage = 1;
+
+        // Załaduj z nowymi filtrami
+        loadCards(1);
+    }
+
+    function clearFilters() {
+        currentFilters.search = '';
+        currentFilters.status = '';
+
+        document.getElementById('searchInput').value = '';
+        document.getElementById('statusFilter').value = '';
+
+        currentPage = 1;
+        loadCards(1);
+    }
+
+    function updateSearchInfo() {
+        const searchInfo = document.getElementById('searchInfo');
+        const searchResultText = document.getElementById('searchResultText');
+
+        if (isFiltered && (currentFilters.search || currentFilters.status)) {
+            let filterText = '';
+            if (currentFilters.search && currentFilters.status) {
+                filterText = `Search: "${currentFilters.search}" + Status: "${currentFilters.status}"`;
+            } else if (currentFilters.search) {
+                filterText = `Search: "${currentFilters.search}"`;
+            } else if (currentFilters.status) {
+                filterText = `Status: "${currentFilters.status}"`;
+            }
+
+            searchResultText.textContent = `${filterText} - Found ${totalCards} cards`;
+            searchInfo.style.display = 'block';
+        } else {
+            searchInfo.style.display = 'none';
+        }
+    }
+
+    function updateSummaryStats() {
+        // Pobierz pełne statystyki z Redis
+        fetch('/api/redis-data')
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('activeCards').textContent = data.active_cards || 0;
+                document.getElementById('inactiveCards').textContent = data.inactive_cards || 0;
+                document.getElementById('totalBalance').textContent = formatAmount(data.total_balance || 0);
+                document.getElementById('avgBalance').textContent = formatAmount(data.avg_balance || 0);
+            })
+            .catch(err => console.error('Error loading stats:', err));
+    }
+
+    function updatePagination() {
+        const headerEl = document.querySelector('.panel-header h2');
+
+        if (isFiltered) {
+            headerEl.textContent = `Card List (${totalCards} filtered results)`;
+        } else {
+            headerEl.textContent = `Card List (${totalCards} total cards)`;
+        }
+
+        if (totalPages <= 1) {
+            document.getElementById('cardsPagination').innerHTML = '';
+            return;
+        }
+
+        const paginationHTML = `
+            <div style="display: flex; gap: 0.5rem; align-items: center; justify-content: center; margin-top: 1rem; padding: 1rem;">
+                <button class="btn btn-secondary" onclick="loadCards(${currentPage - 1})" ${currentPage <= 1 ? 'disabled' : ''}>
+                    ← Previous
+                </button>
+                <span style="margin: 0 1rem;">
+                    Page ${currentPage} of ${totalPages}
+                </span>
+                <button class="btn btn-secondary" onclick="loadCards(${currentPage + 1})" ${currentPage >= totalPages ? 'disabled' : ''}>
+                    Next →
+                </button>
+
+                ${totalPages <= 10 ? `
+                    <select onchange="loadCards(parseInt(this.value))" style="margin-left: 1rem; padding: 0.5rem;">
+                        ${Array.from({length: totalPages}, (_, i) => i + 1).map(page =>
+                            `<option value="${page}" ${page === currentPage ? 'selected' : ''}>Page ${page}</option>`
+                        ).join('')}
+                    </select>
+                ` : ''}
+            </div>
+        `;
+
+        document.getElementById('cardsPagination').innerHTML = paginationHTML;
+    }
+
+    function displayCards(cards) {
+        const tableEl = document.getElementById('cardsTable');
+
+        if (cards.length === 0) {
+            const emptyMessage = isFiltered ? 'No cards match your search criteria' : 'No cards found';
+            tableEl.innerHTML = `<div class="empty-state"><h3>No cards found</h3><p>${emptyMessage}</p></div>`;
+            return;
+        }
+
+        const tableHTML = `
+            <table class="table table-clickable">
+                <thead>
+                    <tr>
+                        <th>Card ID</th>
+                        <th>User</th>
+                        <th>Status</th>
+                        <th>Balance</th>
+                        <th>Daily Limit</th>
+                        <th>Avg Amount</th>
+                        <th>Transactions</th>
+                        <th>Expires</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${cards.map(card => {
+                        const isActive = card.is_active;
+                        const expiryDate = new Date(card.expiry_date);
+                        const isExpired = expiryDate < new Date();
+                        const txCount = card.transaction_count || 0;
+
+                        return `
+                            <tr onclick="viewCard('${card.card_id}')">
+                                <td>
+                                    <code style="background: #f8f9fa; padding: 0.2rem 0.5rem; border-radius: 4px;">
+                                        ${highlightSearchTerm(card.card_id, currentFilters.search)}
+                                    </code>
+                                </td>
+                                <td>
+                                    <a href="/user/${card.user_id}" class="text-muted" onclick="event.stopPropagation();">
+                                        ${highlightSearchTerm(card.user_id, currentFilters.search)}
+                                    </a>
+                                </td>
+                                <td>
+                                    <span class="badge ${isActive ? 'badge-success' : 'badge-danger'}">
+                                        ${isActive ? '✅ Active' : '❌ Inactive'}
+                                    </span>
+                                    ${isExpired ? '<br><span class="badge badge-warning" style="margin-top: 0.25rem;">⚠️ Expired</span>' : ''}
+                                </td>
+                                <td class="text-success">
+                                    <strong>${formatAmount(card.current_balance || 0)}</strong>
+                                </td>
+                                <td class="text-muted">
+                                    ${formatAmount(card.daily_limit || 0)}
+                                </td>
+                                <td class="text-muted">
+                                    ${formatAmount(card.avg_amount || 0)}
+                                </td>
+                                <td>
+                                    <span class="badge badge-info">
+                                        ${txCount} transactions
+                                    </span>
+                                </td>
+                                <td class="${isExpired ? 'text-danger' : 'text-muted'}">
+                                    ${expiryDate.toLocaleDateString()}
+                                </td>
+                            </tr>
+                        `;
+                    }).join('')}
+                </tbody>
+            </table>
+        `;
+
+        tableEl.innerHTML = tableHTML;
+    }
+
+    function highlightSearchTerm(text, searchTerm) {
+        if (!searchTerm || !text) return text;
+
+        const regex = new RegExp(`(${searchTerm})`, 'gi');
+        return text.replace(regex, '<mark style="background: yellow; padding: 0.1rem;">$1</mark>');
+    }
+
+    function viewCard(cardId) {
+        window.location.href = `/card/${cardId}`;
+    }
+
+    function refreshCards() {
+        loadCards(currentPage);
+    }
+</script>
+{% endblock %}

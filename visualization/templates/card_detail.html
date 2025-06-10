@@ -1,0 +1,533 @@
+{% extends "base.html" %}
+
+{% block title %}Card Details - Transaction Monitor{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">💳 Card Details</h1>
+    <p class="page-subtitle">Card: <code>{{ card_id }}</code></p>
+</div>
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
+    <div>
+        <!-- Card Profile -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">Card Profile</h2>
+                <a href="/cards" class="btn btn-secondary">← Back to Cards</a>
+            </div>
+            
+            <div id="cardProfile">
+                <div class="loading">Loading card profile...</div>
+            </div>
+        </div>
+
+        <!-- Transaction History -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">📊 Transaction History</h2>
+            </div>
+            
+            <div id="transactionHistory">
+                <div class="loading">Loading transactions...</div>
+            </div>
+        </div>
+
+        <!-- Card Anomalies -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">🚨 Recent Anomalies</h2>
+            </div>
+
+            <div id="cardAnomalies">
+                <div class="loading">Loading anomalies...</div>
+            </div>
+        </div>
+    </div>
+
+    <div>
+        <!-- Transaction Stats -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">Statistics</h2>
+            </div>
+
+            <div id="cardStats">
+                <div class="loading">Loading statistics...</div>
+            </div>
+        </div>
+
+        <!-- Merchant Categories Chart -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">🏪 Merchant Categories</h2>
+            </div>
+
+            <div style="height: 300px;">
+                <canvas id="merchantChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Transaction Locations Map -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">🗺️ Transaction Locations</h2>
+            </div>
+
+            <div id="map" style="height: 300px; border-radius: 12px;"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const cardId = '{{ card_id }}';
+    let map;
+    let merchantChart;
+    let cardData = null;
+
+    document.addEventListener('DOMContentLoaded', function() {
+        initializeMap();
+        initializeChart();
+        loadCardDetails();
+    });
+
+    function initializeMap() {
+        map = L.map('map').setView([52.0693, 19.4803], 6);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+    }
+
+    function initializeChart() {
+        const ctx = document.getElementById('merchantChart').getContext('2d');
+        merchantChart = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: [],
+                datasets: [{
+                    data: [],
+                    backgroundColor: [
+                        '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0',
+                        '#9966FF', '#FF9F40', '#FF6384', '#C9CBCF'
+                    ]
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'bottom' }
+                }
+            }
+        });
+    }
+
+    async function loadCardDetails() {
+        try {
+            showLoading('cardProfile');
+            showLoading('cardStats');
+            showLoading('transactionHistory');
+            showLoading('cardAnomalies');
+
+            const response = await fetch(`/api/card/${cardId}`);
+            if (!response.ok) {
+                if (response.status === 404) {
+                    throw new Error('Card not found');
+                }
+                throw new Error('API Error');
+            }
+
+            const data = await response.json();
+            cardData = data;
+
+            updateConnectionStatus(true);
+            displayCardProfile(data.profile);
+            displayCardStats(data.transaction_stats);
+            displayTransactionHistory(data.transaction_stats);
+            displayCardAnomalies(data.anomalies, data.anomaly_stats);
+            updateMerchantChart(data.transaction_stats);
+            updateLocationsMap(data.transaction_stats);
+
+        } catch (error) {
+            console.error('Error loading card:', error);
+            updateConnectionStatus(false);
+            showError('cardProfile', error.message);
+            showError('cardStats', error.message);
+            showError('transactionHistory', error.message);
+            showError('cardAnomalies', error.message);
+        }
+    }
+
+    function displayCardProfile(profile) {
+        const isActive = profile.is_active;
+        const expiryDate = new Date(profile.expiry_date);
+        const isExpired = expiryDate < new Date();
+
+        const profileHTML = `
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
+                <div>
+                    <h3 style="margin-bottom: 1rem; color: #2c3e50;">Card Information</h3>
+                    <table class="table">
+                        <tr>
+                            <td><strong>Card ID</strong></td>
+                            <td><code>${profile.card_id}</code></td>
+                        </tr>
+                        <tr>
+                            <td><strong>User ID</strong></td>
+                            <td>
+                                <a href="/user/${profile.user_id}">${profile.user_id}</a>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><strong>Status</strong></td>
+                            <td>
+                                <span class="badge ${isActive ? 'badge-success' : 'badge-danger'}">
+                                    ${isActive ? '✅ Active' : '❌ Inactive'}
+                                </span>
+                                ${isExpired ? '<br><span class="badge badge-warning" style="margin-top: 0.25rem;">⚠️ Expired</span>' : ''}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><strong>Expiry Date</strong></td>
+                            <td class="${isExpired ? 'text-danger' : 'text-muted'}">
+                                ${expiryDate.toLocaleDateString()}
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+
+                <div>
+                    <h3 style="margin-bottom: 1rem; color: #2c3e50;">Financial Details</h3>
+                    <table class="table">
+                        <tr>
+                            <td><strong>Current Balance</strong></td>
+                            <td class="text-success">
+                                <strong style="font-size: 1.2rem;">${formatAmount(profile.current_balance)}</strong>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><strong>Daily Limit</strong></td>
+                            <td class="text-muted">${formatAmount(profile.daily_limit)}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Monthly Limit</strong></td>
+                            <td class="text-muted">${formatAmount(profile.monthly_limit)}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Transaction Limit</strong></td>
+                            <td class="text-muted">${formatAmount(profile.transaction_limit)}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Average Amount</strong></td>
+                            <td class="text-info">${formatAmount(profile.avg_amount)}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Std Amount</strong></td>
+                            <td class="text-muted">${formatAmount(profile.std_amount)}</td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+        `;
+
+        document.getElementById('cardProfile').innerHTML = profileHTML;
+    }
+
+    function displayCardStats(stats) {
+        if (!stats) {
+            document.getElementById('cardStats').innerHTML = '<div class="empty-state"><h3>No transaction data</h3><p>This card has no transaction history</p></div>';
+            return;
+        }
+
+        const approvedCount = stats.status_stats.approved || 0;
+        const declinedCount = stats.status_stats.declined || 0;
+        const declineRate = stats.total_transactions > 0 ?
+            ((declinedCount / stats.total_transactions) * 100).toFixed(1) : 0;
+
+        const statsHTML = `
+            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem;">
+                <div style="text-align: center; padding: 1rem; background: #e3f2fd; border-radius: 8px;">
+                    <div style="font-size: 2rem; font-weight: 700; color: #1976d2;">${stats.total_transactions}</div>
+                    <div style="color: #1976d2; font-weight: 600;">Total Transactions</div>
+                </div>
+
+                <div style="text-align: center; padding: 1rem; background: #e8f5e8; border-radius: 8px;">
+                    <div style="font-size: 2rem; font-weight: 700; color: #2e7d32;">${formatAmount(stats.total_amount)}</div>
+                    <div style="color: #2e7d32; font-weight: 600;">Total Amount</div>
+                </div>
+
+                <div style="text-align: center; padding: 1rem; background: #fff3e0; border-radius: 8px;">
+                    <div style="font-size: 2rem; font-weight: 700; color: #f57c00;">${formatAmount(stats.avg_amount)}</div>
+                    <div style="color: #f57c00; font-weight: 600;">Average Amount</div>
+                </div>
+
+                <div style="text-align: center; padding: 1rem; background: ${declineRate > 10 ? '#ffebee' : '#e8f5e8'}; border-radius: 8px;">
+                    <div style="font-size: 2rem; font-weight: 700; color: ${declineRate > 10 ? '#c62828' : '#2e7d32'};">${declineRate}%</div>
+                    <div style="color: ${declineRate > 10 ? '#c62828' : '#2e7d32'}; font-weight: 600;">Decline Rate</div>
+                </div>
+            </div>
+
+            <div style="margin-top: 1.5rem;">
+                <h4 style="margin-bottom: 1rem; color: #2c3e50;">Status Breakdown</h4>
+                <div style="display: flex; gap: 1rem;">
+                    <div style="flex: 1; padding: 1rem; background: #d4edda; border-radius: 8px; text-align: center;">
+                        <div style="font-size: 1.5rem; font-weight: 700; color: #155724;">${approvedCount}</div>
+                        <div style="color: #155724;">✅ Approved</div>
+                    </div>
+                    <div style="flex: 1; padding: 1rem; background: #f8d7da; border-radius: 8px; text-align: center;">
+                        <div style="font-size: 1.5rem; font-weight: 700; color: #721c24;">${declinedCount}</div>
+                        <div style="color: #721c24;">❌ Declined</div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        document.getElementById('cardStats').innerHTML = statsHTML;
+    }
+
+    function displayTransactionHistory(stats) {
+        if (!stats || !stats.recent_transactions || stats.recent_transactions.length === 0) {
+            document.getElementById('transactionHistory').innerHTML = '<div class="empty-state"><h3>No transactions</h3><p>No recent transactions found</p></div>';
+            return;
+        }
+
+        const historyHTML = `
+            <table class="table table-clickable">
+                <thead>
+                    <tr>
+                        <th>Transaction ID</th>
+                        <th>Amount</th>
+                        <th>Status</th>
+                        <th>Merchant</th>
+                        <th>Location</th>
+                        <th>Time</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${stats.recent_transactions.map(tx => `
+                        <tr onclick="viewTransaction('${tx.transaction_id}')">
+                            <td>
+                                <code style="background: #f8f9fa; padding: 0.2rem 0.4rem; border-radius: 3px; font-size: 0.8rem;">
+                                    ${tx.transaction_id}
+                                </code>
+                            </td>
+                            <td class="${tx.status === 'declined' ? 'text-danger' : 'text-success'}">
+                                <strong>${formatAmount(tx.amount)}</strong>
+                            </td>
+                            <td>
+                                <span class="badge ${tx.status === 'approved' ? 'badge-success' : 'badge-danger'}">
+                                    ${tx.status === 'approved' ? '✅' : '❌'} ${tx.status}
+                                </span>
+                            </td>
+                            <td>
+                                <span class="badge badge-info">${tx.merchant_category || 'general'}</span>
+                            </td>
+                            <td class="text-muted">
+                                📍 ${tx.location?.city || 'Unknown'}, ${tx.location?.country || 'Unknown'}
+                            </td>
+                            <td class="text-muted">
+                                ${formatDate(tx.timestamp)}
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        `;
+
+        document.getElementById('transactionHistory').innerHTML = historyHTML;
+    }
+
+    function displayCardAnomalies(anomalies, anomalyStats) {
+        const anomaliesEl = document.getElementById('cardAnomalies');
+
+        if (!anomalies || anomalies.length === 0) {
+            anomaliesEl.innerHTML = '<div class="empty-state"><h3>No anomalies</h3><p>No anomalies detected for this card</p></div>';
+            return;
+        }
+
+        let statsHTML = '';
+        if (anomalyStats) {
+            statsHTML = `
+                <div style="background: #fff3cd; padding: 1rem; border-radius: 8px; margin-bottom: 1rem; border-left: 4px solid #ffc107;">
+                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; text-align: center;">
+                        <div>
+                            <div style="font-size: 1.5rem; font-weight: 700; color: #856404;">${anomalyStats.total_anomalies}</div>
+                            <div style="color: #856404; font-size: 0.9rem;">Total Anomalies</div>
+                        </div>
+                        <div>
+                            <div style="font-size: 1.5rem; font-weight: 700; color: #856404;">${(anomalyStats.avg_severity * 100).toFixed(1)}%</div>
+                            <div style="color: #856404; font-size: 0.9rem;">Avg Severity</div>
+                        </div>
+                        <div>
+                            <div style="font-size: 1.5rem; font-weight: 700; color: #856404;">${(anomalyStats.max_severity * 100).toFixed(1)}%</div>
+                            <div style="color: #856404; font-size: 0.9rem;">Max Severity</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        const anomaliesHTML = anomalies.slice(0, 10).map(anomaly => {
+            const severity = anomaly.severity || 0;
+            const severityLevel = getSeverityLevel(severity);
+            const severityClass = getSeverityClass(severity);
+
+            return `
+                <div onclick="window.location.href='/anomaly/${anomaly.alert_id}'" style="
+                    padding: 1rem;
+                    border-left: 4px solid ${getSeverityColor(severity)};
+                    background: ${getSeverityBgColor(severity)};
+                    margin-bottom: 0.5rem;
+                    border-radius: 0 8px 8px 0;
+                    cursor: pointer;
+                    transition: transform 0.2s ease;
+                " onmouseover="this.style.transform='translateX(5px)'" onmouseout="this.style.transform='translateX(0)'">
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
+                        <span class="badge ${severityClass}">
+                            ${getAnomalyIcon(anomaly.anomaly_type)} ${severityLevel}
+                        </span>
+                        <div style="font-size: 0.8rem; color: #666;">
+                            ${formatDate(anomaly.timestamp)}
+                        </div>
+                    </div>
+                    <div style="font-weight: 600; color: #2c3e50; margin-bottom: 0.5rem;">
+                        ${formatAnomalyType(anomaly.anomaly_type)}
+                    </div>
+                    <div style="font-size: 0.9rem; color: #666; line-height: 1.4;">
+                        ${anomaly.description.substring(0, 150)}${anomaly.description.length > 150 ? '...' : ''}
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        anomaliesEl.innerHTML = statsHTML + anomaliesHTML;
+
+        if (anomalies.length > 10) {
+            anomaliesEl.innerHTML += `
+                <div style="text-align: center; padding: 1rem;">
+                    <a href="/anomalies?search=${cardId}" class="btn btn-secondary">
+                        View All ${anomalies.length} Anomalies for this Card
+                    </a>
+                </div>
+            `;
+        }
+    }
+
+    // Utility functions for anomalies
+    function getSeverityLevel(severity) {
+        if (severity >= 0.9) return 'CRITICAL';
+        if (severity >= 0.7) return 'HIGH';
+        if (severity >= 0.5) return 'MEDIUM';
+        return 'LOW';
+    }
+
+    function getSeverityClass(severity) {
+        if (severity >= 0.9) return 'badge-danger';
+        if (severity >= 0.7) return 'badge-warning';
+        if (severity >= 0.5) return 'badge-info';
+        return 'badge-secondary';
+    }
+
+    function getSeverityColor(severity) {
+        if (severity >= 0.9) return '#e74c3c';
+        if (severity >= 0.7) return '#f39c12';
+        if (severity >= 0.5) return '#3498db';
+        return '#95a5a6';
+    }
+
+    function getSeverityBgColor(severity) {
+        if (severity >= 0.9) return '#ffebee';
+        if (severity >= 0.7) return '#fff8e1';
+        if (severity >= 0.5) return '#e3f2fd';
+        return '#f5f5f5';
+    }
+
+    function getAnomalyIcon(type) {
+        const icons = {
+            'AMOUNT_ANOMALY': '💰',
+            'INACTIVE_CARD': '🚫',
+            'EXPIRED_CARD': '⏰',
+            'INSUFFICIENT_FUNDS': '💸',
+            'TRANSACTION_LIMIT_EXCEEDED': '🚨',
+            'UNUSUAL_MERCHANT': '🏪',
+            'MICRO_TRANSACTIONS_PATTERN': '🔬',
+            'RAPID_GEO_CHANGE_PATTERN': '🌍',
+            'DUPLICATE_TRANSACTIONS_PATTERN': '🔄',
+            'ROUND_AMOUNTS_PATTERN': '🎯',
+            'ATM_PATTERN_PATTERN': '🏧'
+        };
+        return icons[type] || '⚠️';
+    }
+
+    function formatAnomalyType(type) {
+        if (!type) return 'Unknown';
+        return type.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, l => l.toUpperCase());
+    }
+
+    function updateMerchantChart(stats) {
+        if (!stats || !stats.merchant_stats) {
+            return;
+        }
+
+        const merchantData = stats.merchant_stats;
+        merchantChart.data.labels = Object.keys(merchantData);
+        merchantChart.data.datasets[0].data = Object.values(merchantData);
+        merchantChart.update();
+    }
+
+    function updateLocationsMap(stats) {
+        if (!stats || !stats.locations || stats.locations.length === 0) {
+            document.getElementById('map').innerHTML = '<div class="empty-state"><h3>No location data</h3><p>No transaction locations available</p></div>';
+            return;
+        }
+
+        // Clear existing markers
+        map.eachLayer(layer => {
+            if (layer instanceof L.CircleMarker) {
+                map.removeLayer(layer);
+            }
+        });
+
+        const locations = stats.locations.filter(loc => loc && loc.latitude && loc.longitude);
+        
+        if (locations.length === 0) {
+            document.getElementById('map').innerHTML = '<div class="empty-state"><h3>No valid locations</h3><p>No valid location coordinates found</p></div>';
+            return;
+        }
+
+        // Add markers for each location
+        const markers = [];
+        locations.forEach(location => {
+            const marker = L.circleMarker([location.latitude, location.longitude], {
+                radius: 8,
+                fillColor: '#667eea',
+                color: '#667eea',
+                weight: 2,
+                opacity: 0.8,
+                fillOpacity: 0.6
+            }).addTo(map);
+
+            marker.bindPopup(`
+                <div style="text-align: center;">
+                    <h4>${location.city}, ${location.country}</h4>
+                    <p>📍 Location for card transactions</p>
+                </div>
+            `);
+
+            markers.push(marker);
+        });
+
+        // Fit map to show all markers
+        if (markers.length > 0) {
+            const group = new L.featureGroup(markers);
+            map.fitBounds(group.getBounds().pad(0.1));
+        }
+    }
+
+    function viewTransaction(transactionId) {
+        window.location.href = `/transaction/${transactionId}`;
+    }
+</script>
+{% endblock %}

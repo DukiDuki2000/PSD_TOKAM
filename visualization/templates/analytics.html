@@ -1,0 +1,449 @@
+{% extends "base.html" %}
+
+{% block title %}Analytics - Transaction Monitor{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">📈 Analytics Dashboard</h1>
+    <p class="page-subtitle">Global insights and real-time analytics</p>
+</div>
+
+<!-- Global Stats -->
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem;">
+    <div style="background: linear-gradient(135deg, #667eea, #764ba2); color: white; padding: 1.5rem; border-radius: 16px; text-align: center;">
+        <div style="font-size: 2.5rem; font-weight: 700;" id="totalTransactions">-</div>
+        <div style="opacity: 0.9; font-size: 1.1rem;">Total Transactions</div>
+    </div>
+    <div style="background: linear-gradient(135deg, #e74c3c, #c0392b); color: white; padding: 1.5rem; border-radius: 16px; text-align: center;">
+        <div style="font-size: 2.5rem; font-weight: 700;" id="totalAnomalies">-</div>
+        <div style="opacity: 0.9; font-size: 1.1rem;">Total Anomalies</div>
+    </div>
+    <div style="background: linear-gradient(135deg, #f093fb, #f5576c); color: white; padding: 1.5rem; border-radius: 16px; text-align: center;">
+        <div style="font-size: 2.5rem; font-weight: 700;" id="activeCards">-</div>
+        <div style="opacity: 0.9; font-size: 1.1rem;">Total Cards (Redis)</div>
+    </div>
+    <div style="background: linear-gradient(135deg, #4facfe, #00f2fe); color: white; padding: 1.5rem; border-radius: 16px; text-align: center;">
+        <div style="font-size: 2.5rem; font-weight: 700;" id="activeUsers">-</div>
+        <div style="opacity: 0.9; font-size: 1.1rem;">Total Users (Redis)</div>
+    </div>
+    <div style="background: linear-gradient(135deg, #43e97b, #38f9d7); color: white; padding: 1.5rem; border-radius: 16px; text-align: center;">
+        <div style="font-size: 2.5rem; font-weight: 700;" id="declineRate">-%</div>
+        <div style="opacity: 0.9; font-size: 1.1rem;">Decline Rate</div>
+    </div>
+</div>
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
+    <div>
+        <!-- Hourly Volume Chart -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">⏰ Hourly Transaction Volume</h2>
+            </div>
+
+            <div style="height: 350px;">
+                <canvas id="hourlyChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Merchant Categories -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">🏪 Top Merchant Categories</h2>
+            </div>
+
+            <div style="height: 350px;">
+                <canvas id="merchantChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Anomaly Types Chart -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">🚨 Anomaly Types Distribution</h2>
+            </div>
+
+            <div style="height: 350px;">
+                <canvas id="anomalyChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Live Transaction Map -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">🗺️ Live Transaction Map</h2>
+                <button class="btn btn-secondary" onclick="refreshMap()">🔄 Refresh</button>
+            </div>
+
+            <div id="map" style="height: 400px; border-radius: 12px;"></div>
+        </div>
+    </div>
+
+    <div>
+        <!-- Countries Distribution -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">🌍 Countries Distribution</h2>
+            </div>
+
+            <div style="height: 350px;">
+                <canvas id="countriesChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Transaction Status -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">✅ Transaction Status</h2>
+            </div>
+
+            <div style="height: 300px;">
+                <canvas id="statusChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Real-time Activity Feed -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">📡 Live Activity Feed</h2>
+            </div>
+
+            <div id="activityFeed" style="height: 300px; overflow-y: auto;">
+                <div class="loading">Loading activity feed...</div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let map;
+    let charts = {};
+    let locationMarkers = [];
+
+    document.addEventListener('DOMContentLoaded', function() {
+        initializeMap();
+        initializeCharts();
+        loadAnalytics();
+        setInterval(loadAnalytics, 5000);
+    });
+
+    function initializeMap() {
+        map = L.map('map').setView([52.0693, 19.4803], 3);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+    }
+
+    function initializeCharts() {
+        const hourlyCtx = document.getElementById('hourlyChart').getContext('2d');
+        charts.hourly = new Chart(hourlyCtx, {
+            type: 'line',
+            data: {
+                labels: Array.from({length: 24}, (_, i) => `${i}:00`),
+                datasets: [{
+                    label: 'Transaction Volume (PLN)',
+                    data: new Array(24).fill(0),
+                    borderColor: 'rgba(102, 126, 234, 1)',
+                    backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                    tension: 0.4,
+                    fill: true,
+                    pointBackgroundColor: 'rgba(102, 126, 234, 1)',
+                    pointBorderColor: '#fff',
+                    pointBorderWidth: 2,
+                    pointRadius: 4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: 'rgba(0,0,0,0.1)' }
+                    },
+                    x: {
+                        grid: { color: 'rgba(0,0,0,0.1)' }
+                    }
+                },
+                plugins: {
+                    legend: { display: false }
+                }
+            }
+        });
+
+        // Merchant Categories Chart
+        const merchantCtx = document.getElementById('merchantChart').getContext('2d');
+        charts.merchant = new Chart(merchantCtx, {
+            type: 'doughnut',
+            data: {
+                labels: [],
+                datasets: [{
+                    data: [],
+                    backgroundColor: [
+                        '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0',
+                        '#9966FF', '#FF9F40', '#FF6384', '#C9CBCF',
+                        '#36A2EB', '#FFCE56'
+                    ],
+                    borderWidth: 2,
+                    borderColor: '#fff'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'bottom' }
+                }
+            }
+        });
+
+        // Anomaly Types Chart
+        const anomalyCtx = document.getElementById('anomalyChart').getContext('2d');
+        charts.anomaly = new Chart(anomalyCtx, {
+            type: 'doughnut',
+            data: {
+                labels: [],
+                datasets: [{
+                    data: [],
+                    backgroundColor: [
+                        '#e74c3c', '#f39c12', '#9b59b6', '#3498db',
+                        '#1abc9c', '#34495e', '#e67e22', '#95a5a6',
+                        '#2ecc71', '#f1c40f'
+                    ],
+                    borderWidth: 2,
+                    borderColor: '#fff'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'bottom' }
+                }
+            }
+        });
+
+        // Countries Chart
+        const countriesCtx = document.getElementById('countriesChart').getContext('2d');
+        charts.countries = new Chart(countriesCtx, {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Transactions',
+                    data: [],
+                    backgroundColor: 'rgba(67, 233, 123, 0.8)',
+                    borderColor: 'rgba(67, 233, 123, 1)',
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: { beginAtZero: true },
+                    x: {
+                        ticks: { maxRotation: 45 }
+                    }
+                }
+            }
+        });
+
+        // Status Chart
+        const statusCtx = document.getElementById('statusChart').getContext('2d');
+        charts.status = new Chart(statusCtx, {
+            type: 'pie',
+            data: {
+                labels: ['Approved', 'Declined'],
+                datasets: [{
+                    data: [0, 0],
+                    backgroundColor: ['#27ae60', '#e74c3c'],
+                    borderWidth: 2,
+                    borderColor: '#fff'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'bottom' }
+                }
+            }
+        });
+    }
+
+    async function loadAnalytics() {
+        try {
+            const [analyticsResponse, locationsResponse] = await Promise.all([
+                fetch('/api/analytics'),
+                fetch('/api/locations')
+            ]);
+
+            if (!analyticsResponse.ok || !locationsResponse.ok) {
+                throw new Error('API Error');
+            }
+
+            const analytics = await analyticsResponse.json();
+            const locations = await locationsResponse.json();
+
+            updateConnectionStatus(true);
+            updateGlobalStats(analytics);
+            updateCharts(analytics.global_stats);
+            updateMap(locations);
+            updateActivityFeed();
+
+        } catch (error) {
+            console.error('Error loading analytics:', error);
+            updateConnectionStatus(false);
+        }
+    }
+
+    function updateGlobalStats(analytics) {
+        const stats = analytics.global_stats;
+        const approvedCount = stats.status_stats.approved || 0;
+        const declinedCount = stats.status_stats.declined || 0;
+        const total = approvedCount + declinedCount;
+        const declineRate = total > 0 ? ((declinedCount / total) * 100).toFixed(1) : 0;
+
+        document.getElementById('totalTransactions').textContent = analytics.total_transactions.toLocaleString();
+        document.getElementById('totalAnomalies').textContent = (analytics.anomaly_stats?.total_anomalies || 0).toLocaleString();
+        document.getElementById('activeCards').textContent = analytics.redis_stats.total_cards_in_redis.toLocaleString();
+        document.getElementById('activeUsers').textContent = analytics.redis_stats.total_users_in_redis.toLocaleString();
+        document.getElementById('declineRate').textContent = `${declineRate}%`;
+    }
+
+    function updateCharts(stats) {
+        const hourlyData = stats.hourly_volume || {};
+        const volumeArray = new Array(24).fill(0);
+        Object.keys(hourlyData).forEach(hour => {
+            volumeArray[parseInt(hour)] = hourlyData[hour];
+        });
+        charts.hourly.data.datasets[0].data = volumeArray;
+        charts.hourly.update();
+        const merchantData = stats.merchant_stats || {};
+        charts.merchant.data.labels = Object.keys(merchantData);
+        charts.merchant.data.datasets[0].data = Object.values(merchantData);
+        charts.merchant.update();
+        const countryData = stats.country_stats || {};
+        charts.countries.data.labels = Object.keys(countryData);
+        charts.countries.data.datasets[0].data = Object.values(countryData);
+        charts.countries.update();
+        const statusData = stats.status_stats || {};
+        charts.status.data.datasets[0].data = [
+            statusData.approved || 0,
+            statusData.declined || 0
+        ];
+        charts.status.update();
+        const anomalyData = stats.anomaly_types || {};
+        charts.anomaly.data.labels = Object.keys(anomalyData).map(type =>
+            type.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, l => l.toUpperCase())
+        );
+        charts.anomaly.data.datasets[0].data = Object.values(anomalyData);
+        charts.anomaly.update();
+    }
+
+    function updateMap(locations) {
+        locationMarkers.forEach(marker => map.removeLayer(marker));
+        locationMarkers = [];
+        locations.slice(-50).forEach(location => {
+            if (location.lat && location.lng) {
+                let color = '#2196F3';
+
+                if (location.status === 'declined') {
+                    color = '#FF5722';
+                } else if (location.amount > 1000) {
+                    color = '#FF9800';
+                } else if (location.country !== 'Poland') {
+                    color = '#4CAF50';
+                }
+
+                const marker = L.circleMarker([location.lat, location.lng], {
+                    radius: Math.min(Math.sqrt(location.amount / 20), 12) + 3,
+                    fillColor: color,
+                    color: color,
+                    weight: 2,
+                    opacity: 0.8,
+                    fillOpacity: 0.6
+                }).addTo(map);
+
+                marker.bindPopup(`
+                    <div style="text-align: center;">
+                        <strong>${location.city}, ${location.country}</strong><br>
+                        Amount: <strong>${formatAmount(location.amount)}</strong><br>
+                        Status: <strong>${location.status}</strong><br>
+                        <a href="/transaction/${location.transaction_id}">View Details</a>
+                    </div>
+                `);
+
+                locationMarkers.push(marker);
+            }
+        });
+    }
+
+    async function updateActivityFeed() {
+        try {
+            const response = await fetch('/api/transactions?per_page=20');
+            const data = await response.json();
+
+            const feedEl = document.getElementById('activityFeed');
+
+            if (data.transactions.length === 0) {
+                feedEl.innerHTML = '<div class="empty-state"><h3>No activity</h3><p>Waiting for transactions...</p></div>';
+                return;
+            }
+
+            const feedHTML = data.transactions.slice(0, 15).map(tx => {
+                const timeAgo = getTimeAgo(new Date(tx.timestamp));
+
+                return `
+                    <div style="
+                        padding: 1rem;
+                        border-left: 4px solid ${tx.status === 'approved' ? '#27ae60' : '#e74c3c'};
+                        background: ${tx.status === 'approved' ? '#f8fff8' : '#fff8f8'};
+                        margin-bottom: 0.5rem;
+                        border-radius: 0 8px 8px 0;
+                        cursor: pointer;
+                    " onclick="window.location.href='/transaction/${tx.transaction_id}'">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.5rem;">
+                            <div style="font-weight: 600; color: #2c3e50;">
+                                ${formatAmount(tx.amount)}
+                            </div>
+                            <div style="font-size: 0.8rem; color: #666;">
+                                ${timeAgo}
+                            </div>
+                        </div>
+                        <div style="font-size: 0.9rem; color: #666; margin-bottom: 0.25rem;">
+                            📍 ${tx.location?.city || 'Unknown'}, ${tx.location?.country || 'Unknown'}
+                        </div>
+                        <div style="font-size: 0.8rem; color: #888;">
+                            ${tx.merchant_category || 'general'} • ${tx.status}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            feedEl.innerHTML = feedHTML;
+
+        } catch (error) {
+            console.error('Error updating activity feed:', error);
+        }
+    }
+
+    function getTimeAgo(date) {
+        const now = new Date();
+        const diffInSeconds = Math.floor((now - date) / 1000);
+        
+        if (diffInSeconds < 60) return 'just now';
+        if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)}m ago`;
+        if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)}h ago`;
+        return `${Math.floor(diffInSeconds / 86400)}d ago`;
+    }
+
+    function refreshMap() {
+        fetch('/api/locations')
+            .then(response => response.json())
+            .then(locations => updateMap(locations));
+    }
+</script>
+{% endblock %}

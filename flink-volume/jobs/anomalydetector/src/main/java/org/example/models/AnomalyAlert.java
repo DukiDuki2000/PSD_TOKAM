@@ -18,17 +18,22 @@ public class AnomalyAlert {
     @JsonProperty("anomaly_type")
     public String anomalyType;
 
+    @JsonProperty("description")
     public String description;
+
+    @JsonProperty("severity")
     public double severity;
+
+    @JsonProperty("timestamp")
     public long timestamp;
 
-
+    @JsonProperty("location")
     public Location location;
 
     public AnomalyAlert() {}
 
     public AnomalyAlert(String alertId, String transactionId, String cardId, String userId,
-                        String anomalyType, String description, double severity, long timestamp) {
+                        String anomalyType, String description, double severity, long timestamp, Location location) {
         this.alertId = alertId;
         this.transactionId = transactionId;
         this.cardId = cardId;
@@ -37,19 +42,7 @@ public class AnomalyAlert {
         this.description = description;
         this.severity = severity;
         this.timestamp = timestamp;
-    }
-
-    public AnomalyAlert(String alertId, String transactionId, String cardId, String userId,
-                        String anomalyType, String description, double severity, long timestamp, Location location) {
-        this(alertId, transactionId, cardId, userId, anomalyType, description, severity, timestamp);
         this.location = location;
     }
 
-    @Override
-    public String toString() {
-        return String.format("AnomalyAlert{alertId='%s', type='%s', cardId='%s', severity=%.2f, " +
-                        "description='%s', location='%s'}",
-                alertId, anomalyType, cardId, severity, description,
-                location != null ? location.city : "unknown");
-    }
 }

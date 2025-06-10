@@ -12,18 +12,26 @@ public class Transaction {
     @JsonProperty("user_id")
     public String userId;
 
+    @JsonProperty("amount")
     public double amount;
-    public String status ;
+
+    @JsonProperty("status")
+    public String status;
 
     @JsonProperty("merchant_category")
-    public String merchantCategory = "general";
+    public String merchantCategory;
 
+    @JsonProperty("location")
     public Location location;
+
+    @JsonProperty("timestamp")
+    public long timestamp;
 
     public Transaction() {}
 
+
     public Transaction(String transactionId, String cardId, String userId, double amount,
-                       Location location, String status, String merchantCategory) {
+                       Location location, String status, String merchantCategory, long timestamp) {
         this.transactionId = transactionId;
         this.cardId = cardId;
         this.userId = userId;
@@ -31,12 +39,8 @@ public class Transaction {
         this.location = location;
         this.status = status;
         this.merchantCategory = merchantCategory;
+        this.timestamp = timestamp;
     }
 
-    @Override
-    public String toString() {
-        return String.format("Transaction{id='%s', cardId='%s', userId='%s', amount=%.2f, status='%s', category='%s', location='%s'}",
-                transactionId, cardId, userId, amount, status, merchantCategory,
-                location != null ? location.city : "unknown");
-    }
+
 }

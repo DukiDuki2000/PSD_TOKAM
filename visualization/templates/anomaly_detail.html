@@ -1,0 +1,593 @@
+{% extends "base.html" %}
+
+{% block title %}Anomaly Details - Transaction Monitor{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">🚨 Anomaly Details</h1>
+    <p class="page-subtitle">Detailed view for anomaly: <code>{{ alert_id }}</code></p>
+</div>
+
+<div style="display: grid; grid-template-columns: 2fr 1fr; gap: 2rem;">
+    <div>
+        <!-- Anomaly Info Panel -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">Anomaly Information</h2>
+                <a href="/anomalies" class="btn btn-secondary">← Back to Anomalies</a>
+            </div>
+
+            <div id="anomalyDetails">
+                <div class="loading">Loading anomaly details...</div>
+            </div>
+        </div>
+
+        <!-- Related Transaction -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">🔗 Related Transaction</h2>
+            </div>
+
+            <div id="relatedTransaction">
+                <div class="loading">Loading related transaction...</div>
+            </div>
+        </div>
+
+        <!-- Location Map (if available) -->
+        <div class="panel" id="mapPanel" style="display: none;">
+            <div class="panel-header">
+                <h2 class="panel-title">🗺️ Anomaly Location</h2>
+            </div>
+
+            <div id="map" style="height: 400px; border-radius: 12px;"></div>
+        </div>
+    </div>
+
+    <div>
+        <!-- Severity & Risk Assessment -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">Risk Assessment</h2>
+            </div>
+
+            <div id="riskAssessment">
+                <div class="loading">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">Actions</h2>
+            </div>
+
+            <div id="quickActions" style="display: flex; flex-direction: column; gap: 1rem;">
+                <div class="loading">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Similar Anomalies -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">Similar Anomalies</h2>
+            </div>
+
+            <div id="similarAnomalies">
+                <div class="loading">Loading...</div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const alertId = '{{ alert_id }}';
+    let map;
+    let anomalyData = null;
+
+    document.addEventListener('DOMContentLoaded', function() {
+        initializeMap();
+        loadAnomalyDetails();
+    });
+
+function initializeMap() {
+    const mapContainer = document.getElementById('map');
+    if (!mapContainer) {
+        console.error('Map container not found');
+        return;
+    }
+    map = L.map('map', {
+        zoomControl: true,
+        scrollWheelZoom: true,
+        doubleClickZoom: true,
+        boxZoom: true,
+        keyboard: true,
+        dragging: true,
+        touchZoom: true
+    }).setView([52.0693, 19.4803], 6);
+    const tileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        maxZoom: 19,
+        tileSize: 256,
+        zoomOffset: 0,
+        detectRetina: true
+    });
+
+    tileLayer.addTo(map);
+    setTimeout(() => {
+        if (map) {
+            map.invalidateSize();
+        }
+    }, 100);
+}
+
+async function loadAnomalyDetails() {
+    try {
+        showLoading('anomalyDetails');
+        showLoading('riskAssessment');
+        showLoading('quickActions');
+        showLoading('relatedTransaction');
+        showLoading('similarAnomalies');
+
+        const response = await fetch(`/api/anomaly/${alertId}`);
+        if (!response.ok) {
+            if (response.status === 404) {
+                throw new Error('Anomaly not found');
+            }
+            throw new Error('API Error');
+        }
+
+        const anomaly = await response.json();
+        anomalyData = anomaly;
+
+        updateConnectionStatus(true);
+        displayAnomalyDetails(anomaly);
+        displayRiskAssessment(anomaly);
+        displayQuickActions(anomaly);
+        loadRelatedTransaction(anomaly.transaction_id);
+        loadSimilarAnomalies(anomaly);
+        setTimeout(() => {
+            updateMap(anomaly);
+        }, 500);
+
+    } catch (error) {
+        console.error('Error loading anomaly:', error);
+        updateConnectionStatus(false);
+        showError('anomalyDetails', error.message);
+        showError('riskAssessment', error.message);
+        showError('quickActions', error.message);
+        showError('relatedTransaction', error.message);
+        showError('similarAnomalies', error.message);
+    }
+}
+
+    function displayAnomalyDetails(anomaly) {
+        const severity = anomaly.severity || 0;
+        const severityLevel = getSeverityLevel(severity);
+        const severityClass = getSeverityClass(severity);
+
+        const detailsHTML = `
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
+                <div>
+                    <h3 style="margin-bottom: 1rem; color: #2c3e50;">Basic Information</h3>
+                    <table class="table">
+                        <tr>
+                            <td><strong>Alert ID</strong></td>
+                            <td><code>${anomaly.alert_id}</code></td>
+                        </tr>
+                        <tr>
+                            <td><strong>Anomaly Type</strong></td>
+                            <td>
+                                <span class="badge ${getTypeClass(anomaly.anomaly_type)}">
+                                    ${getTypeIcon(anomaly.anomaly_type)} ${formatAnomalyType(anomaly.anomaly_type)}
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><strong>Severity</strong></td>
+                            <td>
+                                <span class="badge ${severityClass}" style="font-size: 1rem; padding: 0.5rem 1rem;">
+                                    ${severityLevel} (${(severity * 100).toFixed(1)}%)
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><strong>Transaction ID</strong></td>
+                            <td>
+                                <a href="/transaction/${anomaly.transaction_id}">${anomaly.transaction_id}</a>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><strong>Card ID</strong></td>
+                            <td>
+                                <a href="/card/${anomaly.card_id}">${anomaly.card_id}</a>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><strong>User ID</strong></td>
+                            <td>
+                                <a href="/user/${anomaly.user_id}">${anomaly.user_id}</a>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><strong>Detection Time</strong></td>
+                            <td>${formatDate(anomaly.timestamp)}</td>
+                        </tr>
+                    </table>
+                </div>
+
+                <div>
+                    <h3 style="margin-bottom: 1rem; color: #2c3e50;">Location Details</h3>
+                    <table class="table">
+                        <tr>
+                            <td><strong>City</strong></td>
+                            <td>${anomaly.location?.city || 'Unknown'}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Country</strong></td>
+                            <td>
+                                ${anomaly.location?.country || 'Unknown'}
+                                ${anomaly.location?.country_code === 'PL' ? '🇵🇱' : '🌍'}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><strong>Country Code</strong></td>
+                            <td><code>${anomaly.location?.country_code || 'N/A'}</code></td>
+                        </tr>
+                        <tr>
+                            <td><strong>Coordinates</strong></td>
+                            <td>
+                                ${anomaly.location?.latitude && anomaly.location?.longitude ?
+                                    `${anomaly.location.latitude}, ${anomaly.location.longitude}` : 'N/A'}
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+
+            <div style="margin-top: 2rem;">
+                <h3 style="margin-bottom: 1rem; color: #2c3e50;">Description</h3>
+                <div style="background: #f8f9fa; padding: 1.5rem; border-radius: 8px; border-left: 4px solid ${severity >= 0.9 ? '#e74c3c' : severity >= 0.7 ? '#f39c12' : '#3498db'};">
+                    <p style="margin: 0; line-height: 1.6; font-size: 1rem;">
+                        ${anomaly.description}
+                    </p>
+                </div>
+            </div>
+        `;
+
+        document.getElementById('anomalyDetails').innerHTML = detailsHTML;
+    }
+
+    function displayRiskAssessment(anomaly) {
+        const severity = anomaly.severity || 0;
+        const riskLevel = getRiskLevel(severity);
+
+        const assessmentHTML = `
+            <div style="text-align: center; margin-bottom: 1.5rem;">
+                <div style="font-size: 3rem; margin-bottom: 0.5rem;">
+                    ${getRiskIcon(severity)}
+                </div>
+                <div style="font-size: 1.5rem; font-weight: 700; color: ${getRiskColor(severity)};">
+                    ${riskLevel}
+                </div>
+                <div style="font-size: 2rem; font-weight: 700; color: #2c3e50;">
+                    ${(severity * 100).toFixed(1)}%
+                </div>
+            </div>
+
+            <div style="background: ${getRiskBgColor(severity)}; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
+                <h4 style="margin: 0 0 0.5rem 0; color: ${getRiskColor(severity)};">Risk Assessment</h4>
+                <p style="margin: 0; color: ${getRiskColor(severity)};">
+                    ${getRiskDescription(anomaly.anomaly_type, severity)}
+                </p>
+            </div>
+        `;
+
+        document.getElementById('riskAssessment').innerHTML = assessmentHTML;
+    }
+
+    function displayQuickActions(anomaly) {
+        const actionsHTML = `
+            <a href="/card/${anomaly.card_id}" class="btn btn-primary" style="width: 100%; margin-bottom: 1rem;">
+                💳 View Card Details
+            </a>
+            <a href="/user/${anomaly.user_id}" class="btn btn-primary" style="width: 100%; margin-bottom: 1rem;">
+                👤 View User Profile
+            </a>
+            <a href="/transaction/${anomaly.transaction_id}" class="btn btn-primary" style="width: 100%; margin-bottom: 1rem;">
+                🔗 View Related Transaction
+            </a>
+            <button onclick="copyAnomalyId()" class="btn btn-secondary" style="width: 100%; margin-bottom: 1rem;">
+                📋 Copy Alert ID
+            </button>
+            <button onclick="exportAnomaly()" class="btn btn-secondary" style="width: 100%; margin-bottom: 1rem;">
+                💾 Export JSON
+            </button>
+            <button onclick="markAsInvestigated()" class="btn btn-secondary" style="width: 100%;">
+                ✓ Mark as Investigated
+            </button>
+        `;
+
+        document.getElementById('quickActions').innerHTML = actionsHTML;
+    }
+
+    async function loadRelatedTransaction(transactionId) {
+        try {
+            const response = await fetch(`/api/transaction/${transactionId}`);
+            if (!response.ok) {
+                document.getElementById('relatedTransaction').innerHTML = '<div class="empty-state"><h3>Transaction not found</h3><p>Related transaction is not available</p></div>';
+                return;
+            }
+
+            const transaction = await response.json();
+            displayRelatedTransaction(transaction);
+
+        } catch (error) {
+            document.getElementById('relatedTransaction').innerHTML = '<div class="empty-state"><h3>Error</h3><p>Could not load related transaction</p></div>';
+        }
+    }
+
+    function displayRelatedTransaction(tx) {
+        const transactionHTML = `
+            <div onclick="window.location.href='/transaction/${tx.transaction_id}'" style="
+                background: linear-gradient(135deg, #f8f9fa, #e9ecef);
+                padding: 1.5rem;
+                border-radius: 12px;
+                cursor: pointer;
+                transition: transform 0.2s ease;
+                border-left: 4px solid ${tx.status === 'approved' ? '#27ae60' : '#e74c3c'};
+            " onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='translateY(0)'">
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem;">
+                    <div>
+                        <h4 style="margin: 0; color: #2c3e50;">${formatAmount(tx.amount)}</h4>
+                        <div style="color: #666; font-size: 0.9rem;">Transaction ID: ${tx.transaction_id}</div>
+                    </div>
+                    <span class="badge ${tx.status === 'approved' ? 'badge-success' : 'badge-danger'}">
+                        ${tx.status === 'approved' ? '✅' : '❌'} ${tx.status}
+                    </span>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; font-size: 0.9rem; color: #666;">
+                    <div><strong>Merchant:</strong> ${tx.merchant_category || 'general'}</div>
+                    <div><strong>Location:</strong> ${tx.location?.city || 'Unknown'}, ${tx.location?.country || 'Unknown'}</div>
+                    <div><strong>Card:</strong> ${tx.card_id}</div>
+                    <div><strong>Time:</strong> ${formatDate(tx.timestamp)}</div>
+                </div>
+            </div>
+        `;
+
+        document.getElementById('relatedTransaction').innerHTML = transactionHTML;
+    }
+
+    async function loadSimilarAnomalies(currentAnomaly) {
+        try {
+            const response = await fetch(`/api/anomalies?type=${currentAnomaly.anomaly_type}&per_page=5`);
+            if (!response.ok) throw new Error('API Error');
+
+            const data = await response.json();
+            const similarAnomalies = data.anomalies.filter(a => a.alert_id !== currentAnomaly.alert_id).slice(0, 3);
+
+            displaySimilarAnomalies(similarAnomalies);
+
+        } catch (error) {
+            document.getElementById('similarAnomalies').innerHTML = '<div class="empty-state"><h3>No similar anomalies</h3></div>';
+        }
+    }
+
+    function displaySimilarAnomalies(anomalies) {
+        if (anomalies.length === 0) {
+            document.getElementById('similarAnomalies').innerHTML = '<div class="empty-state"><h3>No similar anomalies</h3><p>No other anomalies of this type found</p></div>';
+            return;
+        }
+
+        const similarHTML = anomalies.map(anomaly => {
+            const severity = anomaly.severity || 0;
+            const severityLevel = getSeverityLevel(severity);
+            const severityClass = getSeverityClass(severity);
+
+            return `
+                <div onclick="window.location.href='/anomaly/${anomaly.alert_id}'" style="
+                    background: #f8f9fa;
+                    padding: 1rem;
+                    border-radius: 8px;
+                    margin-bottom: 0.5rem;
+                    cursor: pointer;
+                    transition: background 0.2s ease;
+                " onmouseover="this.style.background='#e9ecef'" onmouseout="this.style.background='#f8f9fa'">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.5rem;">
+                        <span class="badge ${severityClass}" style="font-size: 0.8rem;">
+                            ${severityLevel}
+                        </span>
+                        <span style="font-size: 0.8rem; color: #666;">
+                            ${formatDate(anomaly.timestamp)}
+                        </span>
+                    </div>
+                    <div style="font-size: 0.9rem; color: #2c3e50; margin-bottom: 0.5rem;">
+                        Card: ${anomaly.card_id}
+                    </div>
+                    <div style="font-size: 0.8rem; color: #666; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                        ${anomaly.description}
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        document.getElementById('similarAnomalies').innerHTML = similarHTML;
+    }
+
+function updateMap(anomaly) {
+    if (!map) {
+        console.error('Map not initialized');
+        return;
+    }
+    if (!anomaly.location?.latitude || !anomaly.location?.longitude) {
+        document.getElementById('mapPanel').style.display = 'none';
+        return;
+    }
+    document.getElementById('mapPanel').style.display = 'block';
+    const lat = parseFloat(anomaly.location.latitude);
+    const lng = parseFloat(anomaly.location.longitude);
+    setTimeout(() => {
+        map.invalidateSize();
+        map.setView([lat, lng], 12);
+
+        const severity = anomaly.severity || 0;
+        const color = severity >= 0.9 ? '#e74c3c' :
+                     severity >= 0.7 ? '#f39c12' :
+                     severity >= 0.5 ? '#3498db' : '#95a5a6';
+
+        const marker = L.circleMarker([lat, lng], {
+            radius: 15,
+            fillColor: color,
+            color: color,
+            weight: 3,
+            opacity: 0.8,
+            fillOpacity: 0.6
+        }).addTo(map);
+
+        marker.bindPopup(`
+            <div style="text-align: center; min-width: 200px;">
+                <h4 style="margin: 0 0 10px 0;">${anomaly.location.city}, ${anomaly.location.country}</h4>
+                <p style="margin: 5px 0;"><strong>${formatAnomalyType(anomaly.anomaly_type)}</strong></p>
+                <p style="margin: 5px 0;">Severity: <strong>${getSeverityLevel(severity)}</strong></p>
+                <p style="margin: 5px 0;">Alert ID: <strong>${anomaly.alert_id}</strong></p>
+                <p style="margin: 5px 0;">Coordinates: ${lat.toFixed(4)}, ${lng.toFixed(4)}</p>
+            </div>
+        `).openPopup();
+
+    }, 200);
+}
+window.addEventListener('resize', function() {
+    if (map) {
+        setTimeout(() => {
+            map.invalidateSize();
+        }, 100);
+    }
+});
+
+    // Utility functions
+    function getSeverityLevel(severity) {
+        if (severity >= 0.9) return 'CRITICAL';
+        if (severity >= 0.7) return 'HIGH';
+        if (severity >= 0.5) return 'MEDIUM';
+        return 'LOW';
+    }
+
+    function getSeverityClass(severity) {
+        if (severity >= 0.9) return 'badge-danger';
+        if (severity >= 0.7) return 'badge-warning';
+        if (severity >= 0.5) return 'badge-info';
+        return 'badge-secondary';
+    }
+
+    function getRiskLevel(severity) {
+        if (severity >= 0.9) return 'CRITICAL RISK';
+        if (severity >= 0.7) return 'HIGH RISK';
+        if (severity >= 0.5) return 'MEDIUM RISK';
+        return 'LOW RISK';
+    }
+
+    function getRiskIcon(severity) {
+        if (severity >= 0.9) return '🚨';
+        if (severity >= 0.7) return '⚠️';
+        if (severity >= 0.5) return '⚡';
+        return 'ℹ️';
+    }
+
+    function getRiskColor(severity) {
+        if (severity >= 0.9) return '#e74c3c';
+        if (severity >= 0.7) return '#f39c12';
+        if (severity >= 0.5) return '#3498db';
+        return '#95a5a6';
+    }
+
+    function getRiskBgColor(severity) {
+        if (severity >= 0.9) return '#ffebee';
+        if (severity >= 0.7) return '#fff8e1';
+        if (severity >= 0.5) return '#e3f2fd';
+        return '#f5f5f5';
+    }
+
+    function getRiskDescription(type, severity) {
+        const descriptions = {
+            'AMOUNT_ANOMALY': 'Unusual transaction amount detected. This could indicate unauthorized usage or compromised account.',
+            'INACTIVE_CARD': 'Transaction attempted on inactive card. This suggests potential fraud or system error.',
+            'EXPIRED_CARD': 'Transaction attempted on expired card. Immediate attention required.',
+            'INSUFFICIENT_FUNDS': 'Transaction declined due to insufficient funds. Monitor for repeated attempts.',
+            'TRANSACTION_LIMIT_EXCEEDED': 'Transaction amount exceeds card limits. Verify if legitimate.',
+            'UNUSUAL_MERCHANT': 'Transaction with high-risk merchant category. Enhanced monitoring recommended.',
+            'MICRO_TRANSACTIONS_PATTERN': 'Multiple small transactions detected. Possible testing or laundering pattern.',
+            'RAPID_GEO_CHANGE_PATTERN': 'Rapid geographic change between transactions. Possible card cloning or stolen card.',
+            'DUPLICATE_TRANSACTIONS_PATTERN': 'Duplicate transactions detected. System error or fraudulent activity.',
+            'ROUND_AMOUNTS_PATTERN': 'Pattern of round amount transactions. Possible structured activity.',
+            'ATM_PATTERN_PATTERN': 'Unusual ATM usage pattern detected. Monitor for suspicious activity.'
+        };
+        return descriptions[type] || 'Anomalous behavior detected requiring investigation.';
+    }
+
+    function getTypeClass(type) {
+        const typeClasses = {
+            'AMOUNT_ANOMALY': 'badge-warning',
+            'INACTIVE_CARD': 'badge-danger',
+            'EXPIRED_CARD': 'badge-danger',
+            'INSUFFICIENT_FUNDS': 'badge-warning',
+            'TRANSACTION_LIMIT_EXCEEDED': 'badge-warning',
+            'UNUSUAL_MERCHANT': 'badge-info',
+            'MICRO_TRANSACTIONS_PATTERN': 'badge-secondary',
+            'RAPID_GEO_CHANGE_PATTERN': 'badge-warning',
+            'DUPLICATE_TRANSACTIONS_PATTERN': 'badge-danger',
+            'ROUND_AMOUNTS_PATTERN': 'badge-secondary',
+            'ATM_PATTERN_PATTERN': 'badge-info'
+        };
+        return typeClasses[type] || 'badge-secondary';
+    }
+
+    function getTypeIcon(type) {
+        const typeIcons = {
+            'AMOUNT_ANOMALY': '💰',
+            'INACTIVE_CARD': '🚫',
+            'EXPIRED_CARD': '⏰',
+            'INSUFFICIENT_FUNDS': '💸',
+            'TRANSACTION_LIMIT_EXCEEDED': '🚨',
+            'UNUSUAL_MERCHANT': '🏪',
+            'MICRO_TRANSACTIONS_PATTERN': '🔬',
+            'RAPID_GEO_CHANGE_PATTERN': '🌍',
+            'DUPLICATE_TRANSACTIONS_PATTERN': '🔄',
+            'ROUND_AMOUNTS_PATTERN': '🎯',
+            'ATM_PATTERN_PATTERN': '🏧'
+        };
+        return typeIcons[type] || '⚠️';
+    }
+
+    function formatAnomalyType(type) {
+        if (!type) return 'Unknown';
+        return type.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, l => l.toUpperCase());
+    }
+
+    function copyAnomalyId() {
+        navigator.clipboard.writeText(alertId).then(() => {
+            alert('Alert ID copied to clipboard!');
+        });
+    }
+
+    function exportAnomaly() {
+        if (!anomalyData) return;
+
+        const dataStr = JSON.stringify(anomalyData, null, 2);
+        const blob = new Blob([dataStr], {type: 'application/json'});
+        const url = URL.createObjectURL(blob);
+
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `anomaly_${alertId}.json`;
+        a.click();
+
+        URL.revokeObjectURL(url);
+    }
+
+    function markAsInvestigated() {
+        alert('Anomaly marked as investigated (demo functionality)');
+    }
+</script>
+{% endblock %}

@@ -9,7 +9,7 @@ ENV POETRY_NO_INTERACTION=1 \
 WORKDIR /app
 
 
-COPY pyproject.toml poetry.lock ./
+COPY pyproject.toml  ./
 
 RUN poetry install --no-root
 
@@ -20,11 +20,11 @@ ENV FLASK_HOST=0.0.0.0 \
     FLASK_PORT=8080 \
     FLASK_DEBUG=False \
     KAFKA_BROKER=kafka:9093 \
-    KAFKA_TOPIC=transaction
+    KAFKA_TOPIC=anomaly
 
 
-COPY . ./python/
+COPY . .
 
 ENV PYTHONPATH=/app
 
-ENTRYPOINT ["python", "-m", "python.generator.main"]
+ENTRYPOINT ["python", "main.py"]

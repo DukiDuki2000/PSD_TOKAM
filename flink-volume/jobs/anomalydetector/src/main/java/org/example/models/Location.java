@@ -3,9 +3,16 @@ package org.example.models;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 public class Location {
+    @JsonProperty("latitude")
     public double latitude;
+
+    @JsonProperty("longitude")
     public double longitude;
+
+    @JsonProperty("city")
     public String city;
+
+    @JsonProperty("country")
     public String country;
 
     @JsonProperty("country_code")
@@ -21,9 +28,5 @@ public class Location {
         this.countryCode = countryCode;
     }
 
-    @Override
-    public String toString() {
-        return String.format("Location{city='%s', country='%s', lat=%.4f, lng=%.4f}",
-                city, country, latitude, longitude);
-    }
+
 }
