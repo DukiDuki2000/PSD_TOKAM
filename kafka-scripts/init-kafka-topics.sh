@@ -40,7 +40,7 @@ echo "=== Creating Topics ==="
 # Skladnia: create_topic "topic-name" number_of_partitions replication_factor
 
 create_topic "transactions" 1 1
-create_topic "anomaly" 1 1
+create_topic "anomaly" 2 1
 
 echo ""
 echo "=== Summary of Created Topics ==="

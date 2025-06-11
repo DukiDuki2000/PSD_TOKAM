@@ -16,7 +16,7 @@ public class RoundAmountWindowDetector extends BaseWindowAnomalyDetector<Transac
 
     private final OutputTag<AnomalyAlert> roundAmountAnomalyTag;
 
-    private static final int MIN_ROUND_TRANSACTIONS = 3; // Minimum for anomaly
+    private static final int MIN_ROUND_TRANSACTIONS = 3; // Minimum for anomaly (fallback)
     private static final String ROUND_STATS_PREFIX = "round_window_stats:";
     private static final int ROUND_STATS_TTL = 300; // 5 minutes TTL
 
@@ -31,15 +31,68 @@ public class RoundAmountWindowDetector extends BaseWindowAnomalyDetector<Transac
                 .filter(tx -> isRoundAmount(tx.amount))
                 .collect(Collectors.toList());
 
-
         elements.forEach(out::collect);
 
-        if (roundTransactions.size() >= MIN_ROUND_TRANSACTIONS) {
-            detectRoundAmountAnomaly(cardId, roundTransactions, context);
-        }
-
         if (!roundTransactions.isEmpty()) {
+            if (shouldCreateRoundAlert(cardId, roundTransactions, context)) {
+                detectRoundAmountAnomaly(cardId, roundTransactions, context);
+            }
+
             updateRoundWindowStats(cardId, roundTransactions, context.window());
+        }
+    }
+
+    private boolean shouldCreateRoundAlert(String cardId, List<Transaction> roundTransactions, Context context) {
+        try {
+            String alertKey = "recent_alert:" + cardId + ":ROUND_AMOUNTS";
+            String lastAlertTimeStr = getFromRedis(alertKey, String.class);
+
+            if (lastAlertTimeStr != null) {
+                long lastAlertTime = Long.parseLong(lastAlertTimeStr);
+                long timeDiff = context.window().getEnd() - lastAlertTime;
+
+                if (timeDiff < 50_000) {
+                    return false;
+                }
+            }
+
+            int adaptiveThreshold = calculateRoundAdaptiveThreshold(cardId, roundTransactions.size());
+
+            if (roundTransactions.size() >= adaptiveThreshold) {
+                storeInRedis(alertKey, String.valueOf(context.window().getEnd()), 100);
+                return true;
+            }
+
+            return false;
+
+        } catch (Exception e) {
+            System.err.println("Error checking round amount alert conditions: " + e.getMessage());
+            return roundTransactions.size() >= MIN_ROUND_TRANSACTIONS; // Fallback
+        }
+    }
+
+    private int calculateRoundAdaptiveThreshold(String cardId, int currentRoundCount) {
+        try {
+            String statsKey = ROUND_STATS_PREFIX + cardId;
+            RoundWindowStats stats = getFromRedis(statsKey, RoundWindowStats.class);
+
+            if (stats == null || stats.windowCount < 3) {
+                return MIN_ROUND_TRANSACTIONS;
+            }
+
+            double avgRoundPerWindow = stats.totalRoundTransactions / (double) stats.windowCount;
+
+            if (avgRoundPerWindow < 1.5) {
+                return Math.max(2, (int) Math.ceil(avgRoundPerWindow * 3.0));
+            } else if (avgRoundPerWindow < 4.0) {
+                return Math.max(3, (int) Math.ceil(avgRoundPerWindow * 2.0));
+            } else {
+                return Math.max(5, (int) Math.ceil(avgRoundPerWindow * 1.5));
+            }
+
+        } catch (Exception e) {
+            System.err.println("Error calculating round amount adaptive threshold: " + e.getMessage());
+            return MIN_ROUND_TRANSACTIONS;
         }
     }
 
@@ -99,7 +152,7 @@ public class RoundAmountWindowDetector extends BaseWindowAnomalyDetector<Transac
 
         String description = String.format(
                 "ROUND AMOUNT PATTERN: %d round amount transactions in %d-second window. " +
-                        "Total: %.2f PLN, Pattern: %s. Location: %s. ",
+                        "Total: %.2f PLN, Pattern: %s. Location: %s. Adaptive threshold applied.",
                 roundTransactions.size(), windowDurationSeconds,
                 totalAmount, roundPattern, lastTransaction.location.city
         );
@@ -107,7 +160,7 @@ public class RoundAmountWindowDetector extends BaseWindowAnomalyDetector<Transac
         double severity = Math.min(0.8, 0.4 + (roundTransactions.size() * 0.08));
 
         AnomalyAlert alert = new AnomalyAlert(
-                "round_window_" + UUID.randomUUID().toString().substring(0, 8),
+                "round_adaptive_" + UUID.randomUUID().toString().substring(0, 8),
                 lastTransaction.transactionId,
                 cardId,
                 lastTransaction.userId,
@@ -119,7 +172,6 @@ public class RoundAmountWindowDetector extends BaseWindowAnomalyDetector<Transac
         );
 
         context.output(roundAmountAnomalyTag, alert);
-
     }
 
     private void updateRoundWindowStats(String cardId, List<Transaction> roundTransactions, TimeWindow window) {

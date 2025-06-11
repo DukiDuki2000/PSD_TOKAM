@@ -31,7 +31,6 @@ public class RapidGeoChangeWindowDetector extends BaseWindowAnomalyDetector<Tran
                 .sorted(Comparator.comparing(t -> t.timestamp))
                 .collect(Collectors.toList());
 
-
         elements.forEach(out::collect);
 
         if (geoTransactions.size() < MIN_GEO_TRANSACTIONS) {
@@ -41,11 +40,94 @@ public class RapidGeoChangeWindowDetector extends BaseWindowAnomalyDetector<Tran
         List<Transaction> rapidGeoTransactions = findRapidGeoChangesInWindow(geoTransactions);
 
         if (!rapidGeoTransactions.isEmpty()) {
-            detectRapidGeoChangeAnomaly(cardId, geoTransactions, rapidGeoTransactions, context);
+            if (shouldCreateGeoAlert(cardId, rapidGeoTransactions, geoTransactions, context)) {
+                detectRapidGeoChangeAnomaly(cardId, geoTransactions, rapidGeoTransactions, context);
+            }
         }
 
-        if (!geoTransactions.isEmpty()) {
-            updateGeoWindowStats(cardId, geoTransactions, context.window());
+        updateGeoWindowStats(cardId, geoTransactions, context.window());
+    }
+
+    private boolean shouldCreateGeoAlert(String cardId, List<Transaction> rapidGeoTransactions,
+                                         List<Transaction> allTransactions, Context context) {
+        try {
+            String alertKey = "recent_alert:" + cardId + ":RAPID_GEO_CHANGE";
+            String lastAlertTimeStr = getFromRedis(alertKey, String.class);
+
+            if (lastAlertTimeStr != null) {
+                long lastAlertTime = Long.parseLong(lastAlertTimeStr);
+                long timeDiff = context.window().getEnd() - lastAlertTime;
+
+                if (timeDiff < 90_000) {
+                    return false;
+                }
+            }
+
+            double riskScore = calculateGeoRiskScore(rapidGeoTransactions, allTransactions);
+            double adaptiveThreshold = calculateGeoAdaptiveThreshold(cardId, riskScore);
+
+            if (riskScore >= adaptiveThreshold) {
+                storeInRedis(alertKey, String.valueOf(context.window().getEnd()), 180);
+                return true;
+            }
+
+            return false;
+
+        } catch (Exception e) {
+            System.err.println("Error checking geo alert conditions: " + e.getMessage());
+            return !rapidGeoTransactions.isEmpty(); // Fallback
+        }
+    }
+
+    private double calculateGeoRiskScore(List<Transaction> rapidGeoTransactions, List<Transaction> allTransactions) {
+        double score = 0.0;
+
+        score += rapidGeoTransactions.size() * 0.3;
+
+        long foreignCount = allTransactions.stream()
+                .filter(t -> !"PL".equals(t.location.countryCode))
+                .count();
+        double foreignRatio = foreignCount / (double) allTransactions.size();
+        score += foreignRatio * 0.4;
+
+        double maxDistance = 0.0;
+        for (int i = 1; i < allTransactions.size(); i++) {
+            Transaction current = allTransactions.get(i);
+            Transaction previous = allTransactions.get(i - 1);
+            double distance = calculateDistance(
+                    previous.location.latitude, previous.location.longitude,
+                    current.location.latitude, current.location.longitude
+            );
+            maxDistance = Math.max(maxDistance, distance);
+        }
+        score += Math.min(1.0, maxDistance / 1000.0) * 0.3;
+
+        return score;
+    }
+
+    private double calculateGeoAdaptiveThreshold(String cardId, double currentRiskScore) {
+        try {
+            String statsKey = GEO_STATS_PREFIX + cardId;
+            GeoWindowStats stats = getFromRedis(statsKey, GeoWindowStats.class);
+
+            if (stats == null || stats.windowCount < 5) {
+                return 0.5;
+            }
+
+            double avgForeignRatio = stats.totalTransactions > 0 ?
+                    stats.foreignTransactions / (double) stats.totalTransactions : 0.0;
+
+            if (avgForeignRatio < 0.1) {
+                return 0.3;
+            } else if (avgForeignRatio < 0.3) {
+                return 0.6;
+            } else {
+                return 0.8;
+            }
+
+        } catch (Exception e) {
+            System.err.println("Error calculating geo adaptive threshold: " + e.getMessage());
+            return 0.5;
         }
     }
 
@@ -80,7 +162,6 @@ public class RapidGeoChangeWindowDetector extends BaseWindowAnomalyDetector<Tran
         long windowEnd = context.window().getEnd();
         long windowDurationSeconds = (windowEnd - windowStart) / 1000;
 
-
         double maxDistance = 0.0;
         Transaction mostSignificantChange = rapidGeoTransactions.get(0);
         Transaction previousTransaction = null;
@@ -110,7 +191,7 @@ public class RapidGeoChangeWindowDetector extends BaseWindowAnomalyDetector<Tran
         if (previousTransaction != null) {
             String description = String.format(
                     "RAPID GEOGRAPHIC CHANGE: %.1f km in %d seconds (%.1f km/h) within %d-second window. " +
-                            "From: %s, %s → To: %s, %s. Amount: %.2f PLN.",
+                            "From: %s, %s → To: %s, %s. Amount: %.2f PLN. Adaptive threshold applied.",
                     maxDistance, shortestTimeDiff / 1000, (maxDistance / (shortestTimeDiff / 1000.0)) * 3600, windowDurationSeconds,
                     previousTransaction.location.city, previousTransaction.location.country,
                     mostSignificantChange.location.city, mostSignificantChange.location.country,
@@ -120,7 +201,7 @@ public class RapidGeoChangeWindowDetector extends BaseWindowAnomalyDetector<Tran
             double severity = Math.min(0.95, 0.6 + (maxDistance / 1000.0) * 0.1);
 
             AnomalyAlert alert = new AnomalyAlert(
-                    "geo_window_" + UUID.randomUUID().toString().substring(0, 8),
+                    "geo_adaptive_" + UUID.randomUUID().toString().substring(0, 8),
                     mostSignificantChange.transactionId,
                     cardId,
                     mostSignificantChange.userId,
@@ -132,7 +213,6 @@ public class RapidGeoChangeWindowDetector extends BaseWindowAnomalyDetector<Tran
             );
 
             context.output(rapidGeoAnomalyTag, alert);
-
         }
     }
 

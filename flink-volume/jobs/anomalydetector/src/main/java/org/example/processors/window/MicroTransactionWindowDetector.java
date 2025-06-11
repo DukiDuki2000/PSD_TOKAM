@@ -17,7 +17,7 @@ public class MicroTransactionWindowDetector extends BaseWindowAnomalyDetector<Tr
     private final OutputTag<AnomalyAlert> microTransactionAnomalyTag;
 
     private static final double MICRO_TRANSACTION_THRESHOLD = 1.0; // Less than 1 PLN
-    private static final int MIN_MICRO_TRANSACTIONS = 3; // Minimum for anomaly
+    private static final int MIN_MICRO_TRANSACTIONS = 3; // Minimum for anomaly (fallback)
     private static final String MICRO_STATS_PREFIX = "micro_window_stats:";
     private static final int MICRO_STATS_TTL = 300; // 5 minutes TTL
 
@@ -34,12 +34,66 @@ public class MicroTransactionWindowDetector extends BaseWindowAnomalyDetector<Tr
 
         elements.forEach(out::collect);
 
-        if (microTransactions.size() >= MIN_MICRO_TRANSACTIONS) {
-            detectMicroTransactionAnomaly(cardId, microTransactions, context);
-        }
-
         if (!microTransactions.isEmpty()) {
+            if (shouldCreateMicroAlert(cardId, microTransactions, context)) {
+                detectMicroTransactionAnomaly(cardId, microTransactions, context);
+            }
+
             updateMicroWindowStats(cardId, microTransactions, context.window());
+        }
+    }
+
+    private boolean shouldCreateMicroAlert(String cardId, List<Transaction> microTransactions, Context context) {
+        try {
+            String alertKey = "recent_alert:" + cardId + ":MICRO_TRANSACTIONS";
+            String lastAlertTimeStr = getFromRedis(alertKey, String.class);
+
+            if (lastAlertTimeStr != null) {
+                long lastAlertTime = Long.parseLong(lastAlertTimeStr);
+                long timeDiff = context.window().getEnd() - lastAlertTime;
+
+                if (timeDiff < 30_000) {
+                    return false;
+                }
+            }
+
+            int adaptiveThreshold = calculateMicroAdaptiveThreshold(cardId, microTransactions.size());
+
+            if (microTransactions.size() >= adaptiveThreshold) {
+                storeInRedis(alertKey, String.valueOf(context.window().getEnd()), 60);
+                return true;
+            }
+
+            return false;
+
+        } catch (Exception e) {
+            System.err.println("Error checking micro alert conditions: " + e.getMessage());
+            return microTransactions.size() >= MIN_MICRO_TRANSACTIONS;
+        }
+    }
+
+    private int calculateMicroAdaptiveThreshold(String cardId, int currentCount) {
+        try {
+            String statsKey = MICRO_STATS_PREFIX + cardId;
+            MicroWindowStats stats = getFromRedis(statsKey, MicroWindowStats.class);
+
+            if (stats == null || stats.windowCount < 5) {
+                return MIN_MICRO_TRANSACTIONS;
+            }
+
+            double avgMicroPerWindow = stats.totalMicroTransactions / (double) stats.windowCount;
+
+            if (avgMicroPerWindow < 1.0) {
+                return Math.max(2, (int) Math.ceil(avgMicroPerWindow * 3.0));
+            } else if (avgMicroPerWindow < 3.0) {
+                return Math.max(3, (int) Math.ceil(avgMicroPerWindow * 2.5));
+            } else {
+                return Math.max(5, (int) Math.ceil(avgMicroPerWindow * 2.0));
+            }
+
+        } catch (Exception e) {
+            System.err.println("Error calculating micro adaptive threshold: " + e.getMessage());
+            return MIN_MICRO_TRANSACTIONS; // Fallback
         }
     }
 
@@ -58,8 +112,7 @@ public class MicroTransactionWindowDetector extends BaseWindowAnomalyDetector<Tr
 
         String description = String.format(
                 "MICRO TRANSACTION PATTERN: %d transactions ≤%.2f PLN in %d-second window. " +
-                        "Total: %.2f PLN, Avg: %.3f PLN. Location: %s. "
-                        ,
+                        "Total: %.2f PLN, Avg: %.3f PLN. Location: %s. Adaptive threshold applied.",
                 microTransactions.size(), MICRO_TRANSACTION_THRESHOLD, windowDurationSeconds,
                 totalAmount, averageAmount, lastTransaction.location.city
         );
@@ -67,7 +120,7 @@ public class MicroTransactionWindowDetector extends BaseWindowAnomalyDetector<Tr
         double severity = Math.min(0.9, 0.4 + (microTransactions.size() * 0.08));
 
         AnomalyAlert alert = new AnomalyAlert(
-                "micro_window_" + UUID.randomUUID().toString().substring(0, 8),
+                "micro_adaptive_" + UUID.randomUUID().toString().substring(0, 8),
                 lastTransaction.transactionId,
                 cardId,
                 lastTransaction.userId,
@@ -79,7 +132,6 @@ public class MicroTransactionWindowDetector extends BaseWindowAnomalyDetector<Tr
         );
 
         context.output(microTransactionAnomalyTag, alert);
-
     }
 
     private void updateMicroWindowStats(String cardId, List<Transaction> microTransactions, TimeWindow window) {

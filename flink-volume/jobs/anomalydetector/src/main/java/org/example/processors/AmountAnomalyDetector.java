@@ -13,28 +13,9 @@ public class AmountAnomalyDetector extends BaseAnomalyDetector<Transaction, Tran
 
     private final OutputTag<AnomalyAlert> amountAnomalyTag;
 
-    private enum SeverityLevel {
-        HIGH(5.0, 0.5, "MEDIUM"),
-        EXTREME(8.0, 0.7, "HIGH"),
-        CRITICAL(15.0, 0.9, "CRITICAL");
-
-        final double threshold;
-        final double severity;
-        final String name;
-
-        SeverityLevel(double threshold, double severity, String name) {
-            this.threshold = threshold;
-            this.severity = severity;
-            this.name = name;
-        }
-
-        static SeverityLevel fromMultiplier(double multiplier) {
-            if (multiplier >= CRITICAL.threshold) return CRITICAL;
-            if (multiplier >= EXTREME.threshold) return EXTREME;
-            if (multiplier >= HIGH.threshold) return HIGH;
-            return null; // No anomaly
-        }
-    }
+    private static final String AMOUNT_STATS_PREFIX = "amount_stats:";
+    private static final int AMOUNT_STATS_TTL = 300;
+    private static final double MIN_SEVERITY_THRESHOLD = 0.5; // Minimum severity to create alert
 
     public AmountAnomalyDetector(OutputTag<AnomalyAlert> amountAnomalyTag) {
         this.amountAnomalyTag = amountAnomalyTag;
@@ -64,34 +45,108 @@ public class AmountAnomalyDetector extends BaseAnomalyDetector<Transaction, Tran
         }
 
         double multiplier = transaction.amount / userAvgAmount;
-        SeverityLevel level = SeverityLevel.fromMultiplier(multiplier);
 
-        if (level != null) {
-            sendAmountAnomalyAlert(transaction, cardProfile, multiplier, level, context);
+        AmountAnomalyStats stats = getAmountStats(transaction.cardId);
+        double adaptiveSeverity = calculateAdaptiveSeverity(multiplier, stats);
+        String severityLevel = getSeverityLevel(adaptiveSeverity);
+
+        if (adaptiveSeverity >= MIN_SEVERITY_THRESHOLD) {
+            sendAdaptiveAmountAlert(transaction, cardProfile, multiplier, adaptiveSeverity, severityLevel, context);
+            updateAmountStats(transaction.cardId, multiplier, adaptiveSeverity);
         }
     }
 
-    private void sendAmountAnomalyAlert(Transaction transaction, CardProfile cardProfile,
-                                        double multiplier, SeverityLevel level, Context context) {
+    private double calculateAdaptiveSeverity(double multiplier, AmountAnomalyStats stats) {
+        double baseSeverity = getBaseSeverity(multiplier);
+
+        if (stats == null || stats.anomalyCount < 3) {
+            return baseSeverity;
+        }
+        double avgMultiplier = stats.totalMultiplier / stats.anomalyCount;
+
+        if (avgMultiplier > 12.0) {
+            return Math.max(0.0, baseSeverity - 0.2);
+        } else if (avgMultiplier < 6.0) {
+            return Math.min(1.0, baseSeverity + 0.15);
+        }
+
+        return baseSeverity;
+    }
+
+    private double getBaseSeverity(double multiplier) {
+        if (multiplier >= 15.0) return 0.9;   // CRITICAL
+        if (multiplier >= 8.0) return 0.7;    // HIGH
+        if (multiplier >= 5.0) return 0.5;    // MEDIUM
+        return 0.3; // LOW
+    }
+
+    private String getSeverityLevel(double severity) {
+        if (severity >= 0.9) return "CRITICAL";
+        if (severity >= 0.7) return "HIGH";
+        if (severity >= 0.5) return "MEDIUM";
+        return "LOW";
+    }
+
+    private void sendAdaptiveAmountAlert(Transaction transaction, CardProfile cardProfile,
+                                         double multiplier, double severity, String severityLevel, Context context) {
 
         String description = String.format(
-                "%s AMOUNT: %.2f PLN (%.1fx avg %.2f PLN) - Card %s",
-                level.name, transaction.amount, multiplier, cardProfile.avgAmount, transaction.cardId
+                "%s AMOUNT: %.2f PLN (%.1fx avg %.2f PLN) - Card %s. Adaptive threshold applied.",
+                severityLevel, transaction.amount, multiplier, cardProfile.avgAmount, transaction.cardId
         );
 
         AnomalyAlert alert = new AnomalyAlert(
-                "amount_" + UUID.randomUUID().toString().substring(0, 8),
+                "amount_adaptive_" + UUID.randomUUID().toString().substring(0, 8),
                 transaction.transactionId,
                 transaction.cardId,
                 transaction.userId,
                 "AMOUNT_ANOMALY",
                 description,
-                level.severity,
+                severity,
                 transaction.timestamp,
                 transaction.location
         );
 
         context.output(amountAnomalyTag, alert);
+    }
 
+    private AmountAnomalyStats getAmountStats(String cardId) {
+        String statsKey = AMOUNT_STATS_PREFIX + cardId;
+        return getFromRedis(statsKey, AmountAnomalyStats.class);
+    }
+
+    private void updateAmountStats(String cardId, double multiplier, double severity) {
+        try {
+            String statsKey = AMOUNT_STATS_PREFIX + cardId;
+            AmountAnomalyStats stats = getFromRedis(statsKey, AmountAnomalyStats.class);
+
+            if (stats == null) {
+                stats = new AmountAnomalyStats();
+            }
+
+            stats.anomalyCount++;
+            stats.totalMultiplier += multiplier;
+            stats.totalSeverity += severity;
+            stats.lastAnomalyTime = System.currentTimeMillis();
+
+            if (multiplier > stats.maxMultiplier) {
+                stats.maxMultiplier = multiplier;
+            }
+
+            storeInRedis(statsKey, stats, AMOUNT_STATS_TTL);
+
+        } catch (Exception e) {
+            System.err.println("Failed to update amount anomaly stats: " + e.getMessage());
+        }
+    }
+
+    public static class AmountAnomalyStats {
+        public int anomalyCount = 0;
+        public double totalMultiplier = 0.0;
+        public double totalSeverity = 0.0;
+        public double maxMultiplier = 0.0;
+        public long lastAnomalyTime = 0;
+
+        public AmountAnomalyStats() {}
     }
 }

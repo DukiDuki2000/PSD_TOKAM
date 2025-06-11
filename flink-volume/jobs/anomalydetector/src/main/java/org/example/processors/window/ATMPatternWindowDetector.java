@@ -35,13 +35,66 @@ public class ATMPatternWindowDetector extends BaseWindowAnomalyDetector<Transact
 
         elements.forEach(out::collect);
 
-
-        if (atmTransactions.size() >= MIN_ATM_TRANSACTIONS) {
-            detectATMPatternAnomaly(cardId, atmTransactions, context);
-        }
-
         if (!atmTransactions.isEmpty()) {
+            if (shouldCreateATMAlert(cardId, atmTransactions, context)) {
+                detectATMPatternAnomaly(cardId, atmTransactions, context);
+            }
+
             updateATMWindowStats(cardId, atmTransactions, context.window());
+        }
+    }
+
+    private boolean shouldCreateATMAlert(String cardId, List<Transaction> atmTransactions, Context context) {
+        try {
+            String alertKey = "recent_alert:" + cardId + ":ATM_PATTERN";
+            String lastAlertTimeStr = getFromRedis(alertKey, String.class);
+
+            if (lastAlertTimeStr != null) {
+                long lastAlertTime = Long.parseLong(lastAlertTimeStr);
+                long timeDiff = context.window().getEnd() - lastAlertTime;
+
+                if (timeDiff < 60_000) {
+                    return false;
+                }
+            }
+
+            int adaptiveThreshold = calculateATMAdaptiveThreshold(cardId, atmTransactions.size());
+
+            if (atmTransactions.size() >= adaptiveThreshold) {
+                storeInRedis(alertKey, String.valueOf(context.window().getEnd()), 120);
+                return true;
+            }
+
+            return false;
+
+        } catch (Exception e) {
+            System.err.println("Error checking ATM alert conditions: " + e.getMessage());
+            return atmTransactions.size() >= MIN_ATM_TRANSACTIONS;
+        }
+    }
+
+    private int calculateATMAdaptiveThreshold(String cardId, int currentATMCount) {
+        try {
+            String statsKey = ATM_STATS_PREFIX + cardId;
+            ATMWindowStats stats = getFromRedis(statsKey, ATMWindowStats.class);
+
+            if (stats == null || stats.windowCount < 4) {
+                return MIN_ATM_TRANSACTIONS;
+            }
+
+            double avgATMPerWindow = stats.totalATMTransactions / (double) stats.windowCount;
+
+            if (avgATMPerWindow < 1.0) {
+                return Math.max(2, (int) Math.ceil(avgATMPerWindow * 4.0));
+            } else if (avgATMPerWindow < 2.5) {
+                return Math.max(3, (int) Math.ceil(avgATMPerWindow * 2.5));
+            } else {
+                return Math.max(4, (int) Math.ceil(avgATMPerWindow * 2.0));
+            }
+
+        } catch (Exception e) {
+            System.err.println("Error calculating ATM adaptive threshold: " + e.getMessage());
+            return MIN_ATM_TRANSACTIONS;
         }
     }
 
@@ -76,7 +129,7 @@ public class ATMPatternWindowDetector extends BaseWindowAnomalyDetector<Transact
 
         String description = String.format(
                 "ATM PATTERN DETECTED: %d ATM transactions in %d-second window. " +
-                        "Amounts: %s PLN (Total: %.2f PLN). %d/%d are standard ATM denominations. Location: %s.",
+                        "Amounts: %s PLN (Total: %.2f PLN). %d/%d are standard ATM denominations. Location: %s. Adaptive threshold applied.",
                 atmTransactions.size(), windowDurationSeconds,
                 amountsStr, totalAmount, standardAmountCount, atmTransactions.size(),
                 lastTransaction.location.city
@@ -85,7 +138,7 @@ public class ATMPatternWindowDetector extends BaseWindowAnomalyDetector<Transact
         double severity = Math.min(0.85, 0.5 + (standardAmountCount * 0.08) + (atmTransactions.size() * 0.05));
 
         AnomalyAlert alert = new AnomalyAlert(
-                "atm_window_" + UUID.randomUUID().toString().substring(0, 8),
+                "atm_adaptive_" + UUID.randomUUID().toString().substring(0, 8),
                 lastTransaction.transactionId,
                 cardId,
                 lastTransaction.userId,
@@ -97,12 +150,10 @@ public class ATMPatternWindowDetector extends BaseWindowAnomalyDetector<Transact
         );
 
         context.output(atmPatternAnomalyTag, alert);
-
     }
 
     private void updateATMWindowStats(String cardId, List<Transaction> atmTransactions, TimeWindow window) {
         String statsKey = ATM_STATS_PREFIX + cardId;
-        long windowStart = window.getStart();
 
         ATMWindowStats stats = getFromRedis(statsKey, ATMWindowStats.class);
         if (stats == null) {
@@ -111,7 +162,7 @@ public class ATMPatternWindowDetector extends BaseWindowAnomalyDetector<Transact
 
         stats.windowCount++;
         stats.totalATMTransactions += atmTransactions.size();
-        stats.lastWindowStart = windowStart;
+        stats.lastWindowStart = window.getStart();
         stats.lastWindowEnd = window.getEnd();
 
         long standardAmounts = atmTransactions.stream()

@@ -53,7 +53,17 @@ class AnomalyMonitor:
                 value_deserializer=lambda x: json.loads(x.decode('utf-8')),
                 auto_offset_reset='earliest',
                 group_id='anomaly_consumer',
-                enable_auto_commit=False,
+                enable_auto_commit=True,
+                auto_commit_interval_ms=1000,
+                session_timeout_ms=30000,
+                heartbeat_interval_ms=10000,
+                max_poll_records=100,
+                max_poll_interval_ms=300000,
+                fetch_max_wait_ms=1000,
+                fetch_min_bytes=1,
+                fetch_max_bytes=52428800,
+
+
             )
 
             for message in consumer:
